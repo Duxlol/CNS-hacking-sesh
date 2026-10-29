@@ -12,8 +12,8 @@ die nog niet aan bod kwamen (RSA, Diffie-Hellman, web-kwetsbaarheden, encodings,
 ## 0. De meta-methodologie — stel dit jezelf bij ELKE opgave
 
 1. **Categorie op de site?** (Stream Ciphers / Block Ciphers / Hashing / HMAC / Public-Key / Web...) → beperkt meteen de mogelijke aanvallen.
-2. **Wordt een sleutel/nonce/seed/IV hergebruikt** tussen twee berichten? → **two-time pad**.
-3. **Encryptie zonder authenticatie** (geen MAC/HMAC/signature)? → **bit-flipping / malleability**.
+2. **Wordt een sleutel/nonce/seed/IV hergebruikt** tussen twee berichten? → **two-time pad** (formules: §1A.2).
+3. **Encryptie zonder authenticatie** (geen MAC/HMAC/signature)? → **bit-flipping / malleability** (formules: §1A.3 en §1A.5 voor CBC).
 4. **Kleine of voorspelbare sleutelruimte** expliciet vermeld (bv. "20-bit", "standardised keys", "short password")? → **brute force** of **meet-in-the-middle**.
 5. **Zelfgeschreven/"home-made" hash of cipher** (geen AES/SHA uit een standaardbibliotheek)? → waarschijnlijk **omkeerbaar** (XOR/shift/rotate zijn allemaal inverteerbaar).
 6. **Fingerprint/hash "afgekapt" of goedkoop opgeslagen** ("we don't have enough space/money to store the full X")? → **birthday-attack / collision**.
@@ -31,6 +31,8 @@ die nog niet aan bod kwamen (RSA, Diffie-Hellman, web-kwetsbaarheden, encodings,
 ## 1. Stream Cipher aanvallen
 
 ### 1.1 Keystream/seed hergebruik → Two-time pad ✅
+> 🔗 Alle XOR-formules (K = C^P, P = C^K, C1^C2 = P1^P2, ...) staan gebundeld in **§1A**.
+
 **Herkenning:** twee berichten versleuteld met "dezelfde configuratie/seed/nonce".
 ```python
 keystream = bytes(c ^ p for c, p in zip(ciphertext_known, plaintext_known))
@@ -58,6 +60,141 @@ new_ciphertext = bytes(k ^ p for k, p in zip(keystream, new_desired_plaintext))
 
 ### 1.4 RC4-specifieke zwaktes 📘
 Als je ooit RC4 tegenkomt: de eerste paar keystream-bytes zijn statistisch **niet** uniform willekeurig (bekende bias in byte 0 en 1). Bij hergebruikte/voorspelbare sleutels (WEP-stijl) kan je met voldoende samples de sleutel herleiden (FMS-attack, KoreK-attacks). Tool: `aircrack-ng` als het om WEP gaat.
+
+---
+
+## 1A. XOR-formuleblad — welke XOR gebruik ik wanneer? ✅📘
+
+**Grondregels (onthoud enkel deze 4, de rest volgt eruit):**
+`a ^ a = 0` · `a ^ 0 = a` · `a ^ b = b ^ a` · `(a ^ b) ^ c = a ^ (b ^ c)`
+→ Hierdoor kan je in élke XOR-vergelijking een term "naar de andere kant" brengen: heb je `X = A ^ B`, dan geldt `A = X ^ B` en `B = X ^ A`.
+
+### 1A.1 De basisdriehoek (stream cipher / OTP / CTR)
+Drie grootheden, elk is de XOR van de andere twee:
+
+| Je zoekt | Formule | Je hebt nodig |
+|---|---|---|
+| **Ciphertext** `C` | `C = P ^ K` | plaintext + keystream |
+| **Plaintext** `P` | `P = C ^ K` | ciphertext + keystream |
+| **Keystream** `K` | `K = C ^ P` | ciphertext + (known) plaintext |
+
+```python
+keystream = xor_bytes(ciphertext_known, plaintext_known)   # K = C ^ P
+plaintext = xor_bytes(ciphertext_secret, keystream)        # P = C ^ K
+```
+**Ezelsbruggetje:** de "ontbrekende" hoek = XOR van de twee andere.
+
+### 1A.2 Two-time pad (zelfde keystream, twee berichten) ✅
+`C1 = P1 ^ K` en `C2 = P2 ^ K`
+
+| Je zoekt | Formule | Je hebt nodig |
+|---|---|---|
+| `P1 ^ P2` (keystream valt weg!) | `C1 ^ C2` | enkel de 2 ciphertexts |
+| `P2` | `P2 = C1 ^ C2 ^ P1` | beide ciphertexts + `P1` bekend |
+| `K` | `K = C1 ^ P1` | `C1` + `P1` |
+| `P2` (via K) | `P2 = C2 ^ K` | `C2` + K uit de vorige rij |
+
+```python
+p2 = xor_bytes(xor_bytes(c1, c2), p1)       # zonder K expliciet te berekenen
+```
+**Crib dragging (geen enkele plaintext bekend):** `(C1 ^ C2) ^ gok_voor_P1_op_positie_i` = `P2` op dezelfde positie. Schuif je gok (bv. `b"the "`, `b"CNS{"`, `b" flag"`) over alle posities; waar leesbare tekst uitkomt, klopt je gok.
+**Spatie-trick:** `0x20 ^ letter` = die letter met omgekeerde hoofdletter/kleine letter → herkenbaar in `C1 ^ C2`.
+
+### 1A.3 Bit-flipping / malleability (geen MAC) ✅
+Je wil dat de ontvanger `P'` decrypteert i.p.v. het originele `P`, zonder `K` te kennen:
+
+| Formule | Uitleg |
+|---|---|
+| `C' = C ^ P ^ P'` | **Hoofdformule**: nieuwe ciphertext |
+| `C' = C ^ Δ` met `Δ = P ^ P'` | Zelfde, in 2 stappen |
+| `C' = (C ^ P) ^ P' = K ^ P'` | Via keystream (jouw code in §1.3) |
+
+**Truc:** `Δ` is `0x00` op posities waar `P` en `P'` gelijk zijn → je moet enkel de bytes kennen die je **verandert**, niet het hele plaintext. Voorbeeld: `P = "...to alice..."`, `P' = "...to bob..."`: enkel `Δ` op die positie(s) is ≠ 0.
+```python
+delta = xor_bytes(old_segment, new_segment)
+c_new = bytearray(c)
+for i, d in enumerate(delta):
+    c_new[pos + i] ^= d
+```
+Let op: dit werkt per **byte op dezelfde positie** (stream cipher/CTR/OFB). Bij CBC zie §1A.5.
+
+### 1A.4 Repeating-key XOR / single-byte XOR 📘
+`C[i] = P[i] ^ KEY[i mod len(KEY)]`
+
+| Situatie | Aanpak |
+|---|---|
+| **Key = 1 byte** | Brute force 0..255: `P = C ^ b`, kies resultaat met leesbare ASCII |
+| **Known plaintext (≥ key-lengte)** | `KEY = (C ^ P)[:keylen]` — het patroon herhaalt zich |
+| **Header/flag-prefix bekend** (bv. `CNS{`) | `KEY[:4] = C[:4] ^ b"CNS{"`, rest raden/uitbreiden |
+| **Key-lengte onbekend** | Probeer lengtes 1..40: Hamming-afstand (aantal verschillende bits) tussen blokken van `C`; kleinste genormaliseerde afstand = waarschijnlijke lengte. Dan elke "kolom" (elke k-de byte) als single-byte XOR kraken. Tool: `xortool -l <len>` of `xortool -c 20 file` |
+
+```python
+from itertools import cycle
+def xor_repeat(data: bytes, key: bytes) -> bytes:
+    return bytes(d ^ k for d, k in zip(data, cycle(key)))
+```
+**Let op:** `zip(a, b)` kapt af op de kortste → bij een korte key **moet je `cycle()` gebruiken**, anders is je output te kort.
+
+### 1A.5 Block cipher modes (XOR zit in de mode zelf) 📘
+`E` = block-encrypt, `D` = block-decrypt, `IV` = `C0`.
+
+| Mode | Encrypt | Decrypt |
+|---|---|---|
+| **ECB** | `Ci = E(Pi)` | `Pi = D(Ci)` *(geen XOR)* |
+| **CBC** | `Ci = E(Pi ^ C(i-1))` | `Pi = D(Ci) ^ C(i-1)` |
+| **CTR** | `Ci = Pi ^ E(nonce‖counter_i)` | `Pi = Ci ^ E(nonce‖counter_i)` *(= stream cipher, §1A.1)* |
+| **OFB** | `Ci = Pi ^ Oi`, `Oi = E(O(i-1))`, `O0 = IV` | `Pi = Ci ^ Oi` |
+| **CFB** | `Ci = Pi ^ E(C(i-1))` | `Pi = Ci ^ E(C(i-1))` |
+
+**CBC bit-flipping (plaintext van blok *i* gericht aanpassen):**
+`C(i-1)' = C(i-1) ^ Pi ^ Pi'` → blok *i* decrypteert exact naar `Pi'`, **maar** blok *i-1* wordt willekeurige rommel. (Voor blok 1: pas de `IV` aan: `IV' = IV ^ P1 ^ P1'`, geen rommel.)
+
+**CBC padding oracle (uit §2.4):**
+| Formule | Betekenis |
+|---|---|
+| `I = D(Ci)` (intermediate) | onbekend, wordt gezocht |
+| `I[pos] = guess ^ pad_val` | als de oracle "valid padding" zegt voor gok `guess` |
+| `P[pos] = I[pos] ^ C(i-1)[pos]` | echte plaintext-byte, met het **originele** vorige blok |
+| nieuwe `fake_prev[j] = I[j] ^ pad_val` | voor reeds gevonden posities `j`, bij volgende padding-lengte |
+
+**CTR/GCM nonce-reuse:** zelfde `(nonce, counter)` twee keer = zelfde `K` → behandel als two-time pad (§1A.2).
+
+### 1A.6 XOR in zelfgeschreven hashes/ciphers (omkeren) ✅
+Elke XOR-operatie is zijn eigen inverse. Voor stappen van de vorm:
+
+| Forward (hash/cipher) | Inverse (jij) |
+|---|---|
+| `y = x ^ k` (vaste k) | `x = y ^ k` |
+| `y = x ^ (x >> n)` of `x ^ (x << n)` | Niet simpelweg zelf-inverse: herhaal de stap tot alle bits bedekt zijn, of los bit per bit op van hoog→laag (resp. laag→hoog) |
+| **Running XOR**: `y[i] = x[i] ^ y[i-1]` | `x[i] = y[i] ^ y[i-1]`  *(kijk achterwaarts, van hoog naar laag, of parallel)* |
+| **Differentie-XOR**: `y[i] = x[i] ^ x[i-1]` | `x[i] = y[i] ^ x[i-1]`  *(vooruit rekenen, start met x[0])* |
+| `y = (x ^ k1) ^ k2` | `x = y ^ k1 ^ k2` (= `y ^ (k1 ^ k2)`) |
+| `y = rol(x ^ k, r)` | `x = ror(y, r) ^ k` — **omgekeerde volgorde** van de stappen! |
+
+**Vuistregel:** inverse van een pijplijn = alle stappen in **omgekeerde volgorde**, elk met zijn eigen inverse.
+
+### 1A.7 Overige handige XOR-trucs
+| Truc | Formule / code |
+|---|---|
+| **NOT / inverteer alle bits van een byte** | `x ^ 0xFF` |
+| **Bit `n` omdraaien** | `x ^ (1 << n)` |
+| **Zijn twee waarden gelijk?** | `a ^ b == 0` |
+| **Hamming-afstand** (verschillende bits) | `bin(a ^ b).count("1")` |
+| **Swap zonder temp-variabele** | `a ^= b; b ^= a; a ^= b` |
+| **Twee hex-strings XOR'en** | `hex(int(a,16) ^ int(b,16))` of `bytes.fromhex(a)` → `xor_bytes` |
+| **Hex-string met voorloopnullen behouden** | `f"{int(a,16) ^ int(b,16):0{len(a)}x}"` |
+| **XOR van een bytes met een int-key** | `bytes(b ^ key for b in data)` |
+| **Meerdere waarden tegelijk** | `functools.reduce(lambda x, y: x ^ y, lijst)` |
+
+### 1A.8 Snelle beslisboom: "welke XOR moet ik doen?"
+1. Heb ik **C én P** (zelfde bericht) en wil ik K? → `K = C ^ P`
+2. Heb ik **C en K** en wil ik P? → `P = C ^ K`
+3. Heb ik **twee C's met dezelfde K**, en één P? → `P2 = C1 ^ C2 ^ P1`
+4. Heb ik **twee C's, geen P**? → `C1 ^ C2 = P1 ^ P2` → crib dragging
+5. Wil ik een **bericht aanpassen** zonder K? → `C' = C ^ P ^ P'`
+6. Is het **CBC**? → `Pi = D(Ci) ^ C(i-1)`, en voor flip: `C(i-1)' = C(i-1) ^ Pi ^ Pi'`
+7. Is de key **korter dan de data**? → `cycle(key)`, of `key = (C ^ P)` per periode
+8. Zit XOR in een **home-made hash**? → inverse in omgekeerde volgorde (§1A.6)
 
 ---
 
