@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="$PROJECT_DIR$/../../.." vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/../../../CG/Engine_Project" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/../../../Compilers/c-compiler" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/../../../GP/AP-Pacman-Project" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/../../../PSE/PSE_Project" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/../../../TA/tog-ta-2024-2025-09_elaine_marie_siebe_thijs" vcs="Git" />
+  </component>
+</project>

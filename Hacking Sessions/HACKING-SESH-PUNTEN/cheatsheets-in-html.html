@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<title>Security Cheatsheets</title>
+<style>
+    body { font-family: sans-serif; line-height: 1.6; padding: 20px; max-width: 1200px; margin: auto; color: #333; }
+    h1, h2, h3 { color: #0056b3; margin-top: 1.5em; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background-color: #f2f2f2; }
+    code { background-color: #f4f4f4; padding: 2px 4px; border-radius: 4px; font-family: monospace; }
+    pre { background-color: #f4f4f4; padding: 15px; overflow-x: auto; border-radius: 4px; border: 1px solid #ddd; }
+    .document-section { border: 2px solid #0056b3; padding: 20px; margin-bottom: 40px; border-radius: 8px; }
+    blockquote { border-left: 4px solid #ccc; padding-left: 15px; font-style: italic; color: #666; }
+</style>
+</head>
+<body>
+
+<div class="document-section" id="file1">
+    <h1>Computer &amp; Network Security — Hacking Session Cheatsheet (uitgebreide versie)[cite: 1]</h1>
+    <p><em>Gebaseerd op jullie opgeloste oefeningen + algemene/aanpalende technieken voor varianten die nog niet aan bod kwamen (RSA, Diffie-Hellman, web-kwetsbaarheden, encodings, tooling).[cite: 1]</em></p>
+    
+    <blockquote>
+        <strong>Leeswijzer:</strong> ✅ = bevestigd door jullie eigen testen.[cite: 1] 📘 = algemene, publiek gedocumenteerde techniek (nog niet zelf getest op deze specifieke server) — betrouwbare theorie, maar verifieer de details live.[cite: 1] Secties zijn zo opgebouwd dat je op "herkenning" kan zoeken (Ctrl+F) als je een opgavetekst voor je hebt.[cite: 1]
+    </blockquote>
+
+    <h2>0. De meta-methodologie — stel dit jezelf bij ELKE opgave[cite: 1]</h2>
+    <ol>
+        <li><strong>Categorie op de site?</strong> (Stream Ciphers / Block Ciphers / Hashing / HMAC / Public-Key / Web...) → beperkt meteen de mogelijke aanvallen.[cite: 1]</li>
+        <li><strong>Wordt een sleutel/nonce/seed/IV hergebruikt</strong> tussen twee berichten? → <strong>two-time pad</strong>.[cite: 1]</li>
+        <li><strong>Encryptie zonder authenticatie</strong> (geen MAC/HMAC/signature)? → <strong>bit-flipping / malleability</strong>.[cite: 1]</li>
+        <li><strong>Kleine of voorspelbare sleutelruimte</strong> expliciet vermeld (bv. "20-bit", "standardised keys", "short password")? → <strong>brute force</strong> of <strong>meet-in-the-middle</strong>.[cite: 1]</li>
+        <li><strong>Zelfgeschreven/"home-made" hash of cipher</strong> (geen AES/SHA uit een standaardbibliotheek)? → waarschijnlijk <strong>omkeerbaar</strong> (XOR/shift/rotate zijn allemaal inverteerbaar).[cite: 1]</li>
+        <li><strong>Fingerprint/hash "afgekapt" of goedkoop opgeslagen</strong> ("we don't have enough space/money to store the full X")? → <strong>birthday-attack / collision</strong>.[cite: 1]</li>
+        <li><strong>Een JWT</strong> (drie base64url-delen, gescheiden door punten)? → decodeer, kijk naar <code>alg</code>, probeer <code>alg=none</code> of zwak secret.[cite: 1]</li>
+        <li><strong>Een signature/HMAC-header bij JSON</strong>? → kijk naar <strong>canonicalisatie/parsing-mismatch</strong> (dubbele keys, volgorde, witruimte, encoding).[cite: 1]</li>
+        <li><strong>Server vraagt je een "volgende code" te voorspellen</strong>? → <strong>hash chain</strong>, en let op raw bytes vs hex-string![cite: 1]</li>
+        <li><strong>RSA-achtige getallen</strong> (<code>n</code>, <code>e</code>, <code>d</code>, grote priemgetallen, modulus)? → zie §5 (RSA-aanvallen): kijk eerst naar de grootte van <code>e</code> en of <code>n</code> factoriseerbaar is.[cite: 1]</li>
+        <li><strong>Diffie-Hellman-parameters</strong> (<code>g</code>, <code>p</code>, publieke sleutels <code>A</code>/<code>B</code>)? → zie §5.2: is <code>p</code> klein/standaard? Is de subgroep klein?[cite: 1]</li>
+        <li><strong>Een URL met een parameter die een ID/pad/URL bevat</strong>, of een inlog-/sessiesysteem? → denk web-kwetsbaarheden (§6): IDOR, SSRF, path traversal, SQLi, open redirect.[cite: 1]</li>
+        <li><strong>Een onherkenbare blob tekst</strong> (letters+cijfers, of enkel hex, of <code>==</code> op het einde)? → zie §7 (encoding-herkenning) vóór je aan "echte crypto" denkt — soms is het gewoon base64/hex/rot13.[cite: 1]</li>
+        <li><strong>Timing-gevoelige foutmeldingen</strong> ("invalid password" vs "invalid username", of merkbaar tragere responses)? → denk aan <strong>timing attacks</strong> / <strong>oracle-aanvallen</strong> (§2.4, §6).[cite: 1]</li>
+    </ol>
+
+    <h2>1. Stream Cipher aanvallen[cite: 1]</h2>
+    <h3>1.1 Keystream/seed hergebruik → Two-time pad ✅[cite: 1]</h3>
+    <p><strong>Herkenning:</strong> twee berichten versleuteld met "dezelfde configuratie/seed/nonce".[cite: 1]</p>
+    <pre><code>keystream = bytes(c ^ p for c, p in zip(ciphertext_known, plaintext_known))
+flag = bytes(c ^ k for c, k in zip(ciphertext_secret, keystream))</code></pre>
+    <p>Toegepast op: <strong>Replanting</strong>, <strong>Noncense</strong>.[cite: 1]</p>
+    <p><strong>Variant — N berichten, allemaal met dezelfde keystream (klassiek "many-time pad"):</strong> 📘[cite: 1]<br>
+    Als je 3+ ciphertexts met dezelfde keystream hebt zonder een volledig known-plaintext, kan je per bytepositie met frequentie-analyse werken: XOR elk paar ciphertexts (<code>c1^c2 = p1^p2</code>), en gok dat één van de plaintexts op die positie een spatie (<code>0x20</code>) is — spaties XOR'en met letters geven herkenbare patronen (hoofdletter↔kleine letter verschuiving).[cite: 1] Tool: <code>python3 -m venv</code> + <code>xortool</code>, of het CTF-klassieke "crib dragging".[cite: 1]</p>
+
+    <h3>1.2 Zwakke PRNG / state recovery (custom LCG, enz.) ✅[cite: 1]</h3>
+    <p>Zie je eigen uitgewerkte voorbeeld (Replanting).[cite: 1] Generaliseer: elke keer dat je een <strong>custom RNG</strong> ziet met gekende formule (<code>next = (A*state + C) mod M</code>, of een LFSR, of Mersenne Twister met voorspelbare seed zoals <code>time.time()</code>), probeer de <strong>interne state te reconstrueren</strong> uit gedeeltelijke output.[cite: 1]</p>
+    <ul>
+        <li><strong>Mersenne Twister (Python's <code>random</code>)</strong>: als je 624 opeenvolgende 32-bit outputs ziet, kan je de volledige interne state klonen met tools als <code>randcrack</code> (<code>pip install randcrack</code>) en daarna toekomstige "willekeurige" waarden perfect voorspellen.[cite: 1]</li>
+        <li><strong>Geseed met tijd</strong> (<code>random.seed(int(time.time()))</code>): brute force de seed over een klein tijdvenster rond het moment van de request.[cite: 1]</li>
+    </ul>
+
+    <h3>1.3 Malleability / bit-flipping (geen MAC) ✅[cite: 1]</h3>
+    <p>Zie uitgewerkt voorbeeld (Secure Bank 1).[cite: 1] Kernformule:[cite: 1]</p>
+    <pre><code>keystream = bytes(c ^ p for c, p in zip(ciphertext, known_plaintext))
+new_ciphertext = bytes(k ^ p for k, p in zip(keystream, new_desired_plaintext))</code></pre>
+    <p><strong>Let op:</strong> keystream hangt af van nonce — blijf binnen dezelfde sessie werken.[cite: 1]</p>
+    <p><strong>Variant — CTR-counter manipulatie:</strong> 📘 bij AES-CTR kan je, als je de counter/nonce-opbouw kent, ook <strong>blokken van positie laten wisselen</strong> door de counter-waarde in de ciphertext-aanvraag te forceren naar een waarde die al elders gebruikt is (vergelijkbaar met nonce-reuse, maar dan actief uitgelokt in plaats van toevallig).[cite: 1]</p>
+
+    <h3>1.4 RC4-specifieke zwaktes 📘[cite: 1]</h3>
+    <p>Als je ooit RC4 tegenkomt: de eerste paar keystream-bytes zijn statistisch <strong>niet</strong> uniform willekeurig (bekende bias in byte 0 en 1).[cite: 1] Bij hergebruikte/voorspelbare sleutels (WEP-stijl) kan je met voldoende samples de sleutel herleiden (FMS-attack, KoreK-attacks).[cite: 1] Tool: <code>aircrack-ng</code> als het om WEP gaat.[cite: 1]</p>
+
+    <h2>2. Block Cipher aanvallen[cite: 1]</h2>
+    <h3>2.1 Kleine/voorspelbare sleutelruimte → brute force ✅[cite: 1]</h3>
+    <p>Zie Key Standardisation.[cite: 1] Probeer sleutels afgeleid van bekende strings (naam, namespace, bedrijfsnaam), met padding-varianten (nullen vooraan/achteraan, herhaling, hoofdletters/kleine letters), en brute force resterende onbekende tekens als die beperkt zijn.[cite: 1]</p>
+
+    <h3>2.2 Double/meervoudige encryptie → Meet-in-the-Middle ✅[cite: 1]</h3>
+    <p>Zie AES 2 demo.[cite: 1] <code>Enc(K1,P) = Dec(K2,C)</code> → bouw een hashtabel voor alle K1, zoek voor elke K2.[cite: 1]</p>
+    <pre><code>table = {}
+for k1 in range(2**20):
+    table[AES_encrypt(make_key(k1), P)] = k1
+for k2 in range(2**20):
+    mid = AES_decrypt(make_key(k2), C)
+    if mid in table:
+        print("K1 =", table[mid], "K2 =", k2)</code></pre>
+    <p>Vereist een bekend (plaintext-blok, ciphertext-blok)-paar van hetzelfde blok (bestandsheaders zijn goud: BMP <code>"BM"</code>, PNG <code>\x89PNG</code>, JPEG <code>\xFF\xD8\xFF</code>, ZIP <code>PK\x03\x04</code>, PDF <code>%PDF-</code>, GIF <code>GIF89a</code>).[cite: 1]</p>
+
+    <h3>2.3 Mode-herkenning (ECB vs CBC vs CTR/stream) 📘[cite: 1]</h3>
+    <table>
+        <tr><th>Signaal</th><th>Betekent</th></tr>
+        <tr><td>Identieke 16-byte blokken verschijnen herhaaldelijk in de ciphertext[cite: 1]</td><td><strong>ECB</strong> — patronen in plaintext blijven zichtbaar[cite: 1]</td></tr>
+        <tr><td>Afbeelding versleuteld met ECB blijft "herkenbaar" (vormen zichtbaar)[cite: 1]</td><td><strong>ECB</strong> — klassieke demo: het Linux-pinguïn-voorbeeld[cite: 1]</td></tr>
+        <tr><td>Lengte van ciphertext = lengte plaintext + een veelvoud van blokgrootte (padding)[cite: 1]</td><td>Blockmode met padding (CBC meestal)[cite: 1]</td></tr>
+        <tr><td>Lengte ciphertext ≈ lengte plaintext + vaste kleine offset (8 of 12-16 bytes)[cite: 1]</td><td><strong>Stream-achtige mode (CTR/GCM/stream cipher)</strong> met nonce/IV ervoor[cite: 1]</td></tr>
+        <tr><td>Wijziging van 1 ciphertext-byte verandert <strong>1 hele blok</strong> willekeurig bij decryptie, en de rest blijft normaal, maar het <strong>volgende</strong> blok krijgt exact diezelfde bit-flip[cite: 1]</td><td><strong>CBC</strong> (bit-flip propageert typisch)[cite: 1]</td></tr>
+        <tr><td>Wijziging van 1 ciphertext-byte verandert <strong>slechts dat ene byte</strong> bij decryptie[cite: 1]</td><td><strong>Stream cipher / CTR / OFB</strong> (XOR-gebaseerd, malleable — zie §1.3)[cite: 1]</td></tr>
+    </table>
+
+    <h3>2.4 CBC Padding Oracle Attack 📘[cite: 1]</h3>
+    <p><strong>Herkenning:</strong> CBC-mode, en de server geeft een <strong>ander soort foutmelding</strong> (of merkbaar ander gedrag/timing) bij "invalid padding" versus "valid padding maar ongeldige data".[cite: 1]</p>
+    <p><strong>Principe (kort):</strong> PKCS#7-padding betekent dat de laatste bytes van het plaintext aangeven hoeveel paddingbytes er zijn (bv. laatste byte <code>0x04</code> → de laatste 4 bytes moeten allemaal <code>0x04</code> zijn).[cite: 1] Door <strong>de voorlaatste ciphertext-blok byte per byte te wijzigen</strong> en te kijken of de server "padding OK" of "padding FOUT" zegt, kan je <strong>elke byte van het plaintext</strong> achterhalen — zonder de sleutel te kennen, puur via dat ja/nee-signaal.[cite: 1] Je werkt van de laatste byte van een blok naar de eerste.[cite: 1]</p>
+    <pre><code># Zeer vereenvoudigd skelet — pas de oracle-functie aan je server aan
+def padding_oracle(iv_block, cipher_block):
+    # stuur iv_block + cipher_block naar de server, return True als "padding valid"
+    ...
+
+def decrypt_block(prev_block, target_block):
+    intermediate = bytearray(16)
+    plaintext = bytearray(16)
+    for pad_val in range(1, 17):
+        pos = 16 - pad_val
+        fake_prev = bytearray(16)
+        for i in range(pos+1, 16):
+            fake_prev[i] = intermediate[i] ^ pad_val
+        for guess in range(256):
+            fake_prev[pos] = guess
+            if padding_oracle(bytes(fake_prev), target_block):
+                intermediate[pos] = guess ^ pad_val
+                plaintext[pos] = intermediate[pos] ^ prev_block[pos]
+                break
+    return bytes(plaintext)</code></pre>
+    <p><strong>Bron:</strong> https://robertheaton.com/2013/07/29/padding-oracle-attack/ · tool: <code>padbuster</code>.[cite: 1]</p>
+
+    <h3>2.5 Related-key / weak-key varianten (DES-specifiek) 📘[cite: 1]</h3>
+    <p>DES heeft 4 bekende <strong>zwakke sleutels</strong> (en 12 semi-zwakke) waarbij encryptie = decryptie (self-inverse).[cite: 1] Als een opgave specifiek over "DES weak keys" gaat: zoek op *"DES weak keys list"* — er zijn er maar 4, triviaal te proberen.[cite: 1]</p>
+
+    <h2>3. Hash-functie aanvallen[cite: 1]</h2>
+    <h3>3.1 Zelfgeschreven ("home-made") hash → omkeren ✅[cite: 1]</h3>
+    <p>Zie Better Hash.[cite: 1] Keer rondevolgorde + stapvolgorde om, vervang elke operatie door haar inverse (XOR↔XOR, rol↔ror, prefix-XOR-ketting loop je van hoog naar laag, lijstrotatie omgekeerd).[cite: 1]</p>
+
+    <h3>3.2 Afgekapte hash / fingerprint → Birthday-attack ✅[cite: 1]</h3>
+    <p>Zie Secure Bank 2.[cite: 1] Met *n*-bit afgekapte hash vind je een collision in ~2^(n/2) pogingen i.p.v. 2^n.[cite: 1]<br>
+    <strong>Vuistregel-tabel:</strong>[cite: 1]</p>
+    <table>
+        <tr><th>Fingerprint-lengte</th><th>Collision na ongeveer</th></tr>
+        <tr><td>16 bits (4 hex)[cite: 1]</td><td>~256 pogingen[cite: 1]</td></tr>
+        <tr><td>24 bits (6 hex)[cite: 1]</td><td>~4.096 pogingen[cite: 1]</td></tr>
+        <tr><td>32 bits (8 hex)[cite: 1]</td><td>~65.536 pogingen[cite: 1]</td></tr>
+        <tr><td>40 bits (10 hex)[cite: 1]</td><td>~1M pogingen[cite: 1]</td></tr>
+        <tr><td>48 bits (12 hex)[cite: 1]</td><td>~16M pogingen (nog steeds seconden-minuten)[cite: 1]</td></tr>
+    </table>
+
+    <h3>3.3 Hash chain voorspellen ✅[cite: 1]</h3>
+    <p>Zie Space Race 1.[cite: 1] <strong>Hash de ruwe bytes</strong>, niet de hex-tekst: <code>bytes.fromhex(code)</code>, niet <code>code.encode()</code>.[cite: 1]</p>
+
+    <h3>3.4 Hash length-extension attack 📘[cite: 1]</h3>
+    <p><strong>Herkenning:</strong> een MAC geconstrueerd als <code>hash(secret || message)</code> (géén echte HMAC) met MD5/SHA-1/SHA-256 (Merkle–Damgård-constructies zijn hier kwetsbaar aan, SHA-3/BLAKE2 niet).[cite: 1] Je kent <code>hash(secret||message)</code> en de lengte van <code>message</code>, maar niet <code>secret</code> zelf — en je wil data <strong>achteraan toevoegen</strong> met een geldige nieuwe hash.[cite: 1]</p>
+    <pre><code>pip install hlextend --break-system-packages</code></pre>
+    <pre><code>import hlextend
+sha = hlextend.new('sha256')  # of 'sha1', 'md5'
+new_hash = sha.extend(
+    data=b";admin=true",          # wat je wil toevoegen
+    secret=b"origineel_bericht",  # het bericht zoals jij het kent (zonder secret)
+    secret_length=16,             # GOK/brute-force de lengte van de geheime sleutel (probeer 1..64)
+    hexdigest="originele_mac_hex"
+)
+new_message = sha.hexdigest()     # dit stuur je ipv het origineel, met new_hash als MAC</code></pre>
+    <p><strong>Belangrijkste denkstap:</strong> als je de secret-lengte niet kent, loop je gewoon over een plausibel bereik (1 t.e.m. 32 of 64 bytes) en probeer je elke <code>new_message</code>/<code>new_hash</code>-combinatie tot de server er één accepteert.[cite: 1]<br>
+    <strong>Bron:</strong> https://en.wikipedia.org/wiki/Length_extension_attack · CLI-tool: <code>hashpump</code> (https://github.com/bwall/HashPump)[cite: 1]</p>
+
+    <h3>3.5 Hash-identificatie op lengte 📘[cite: 1]</h3>
+    <table>
+        <tr><th>Hex-lengte</th><th>Bits</th><th>Waarschijnlijk algoritme</th></tr>
+        <tr><td>32[cite: 1]</td><td>128[cite: 1]</td><td>MD5[cite: 1]</td></tr>
+        <tr><td>40[cite: 1]</td><td>160[cite: 1]</td><td>SHA-1[cite: 1]</td></tr>
+        <tr><td>56[cite: 1]</td><td>224[cite: 1]</td><td>SHA-224[cite: 1]</td></tr>
+        <tr><td>64[cite: 1]</td><td>256[cite: 1]</td><td>SHA-256[cite: 1]</td></tr>
+        <tr><td>96[cite: 1]</td><td>384[cite: 1]</td><td>SHA-384[cite: 1]</td></tr>
+        <tr><td>128[cite: 1]</td><td>512[cite: 1]</td><td>SHA-512[cite: 1]</td></tr>
+        <tr><td>variabel, <code>$</code>-gescheiden[cite: 1]</td><td>—[cite: 1]</td><td>bcrypt/scrypt/argon2 (herkenbaar aan prefix <code>$2b$</code>, <code>$argon2id$</code>, enz.)[cite: 1]</td></tr>
+    </table>
+
+    <h3>3.6 Known collision-tools voor MD5/SHA-1 📘[cite: 1]</h3>
+    <p>Als een opgave vraagt om <strong>twee verschillende bestanden/berichten met dezelfde volle MD5 of SHA-1</strong> te maken (niet afgekapt): gebruik bestaande, publiek beschikbare collision-generators — zelf zoeken naar een collision is onbegonnen werk.[cite: 1]</p>
+    <ul>
+        <li>MD5: https://github.com/corkami/collisions (kant-en-klare MD5-collision-paren en -tools)[cite: 1]</li>
+        <li>SHA-1: "SHAttered" PDF-collisie-aanpak: https://shattered.io/[cite: 1]</li>
+    </ul>
+
+    <h2>4. Authenticatie-protocollen &amp; MAC's[cite: 1]</h2>
+    <h3>4.1 HTTP/RTSP Digest Authentication — offline dictionary attack ✅[cite: 1]</h3>
+    <p>Zie Security Cam.[cite: 1] RFC 2069 (geen <code>qop</code>): <code>response = MD5(MD5(user:realm:pass):nonce:MD5(method:uri))</code>.[cite: 1]<br>
+    Geen <code>print()</code> per poging in de loop — dat maakt het uren trager.[cite: 1]</p>
+
+    <h3>4.2 JWT-aanvallen — <code>alg: none</code> ✅[cite: 1]</h3>
+    <p>Zie Token of Trust: decodeer header+payload, <code>alg</code>→<code>none</code>, rechten verhogen, her-encoderen, signature-deel leeg laten, versturen als <code>Authorization: Bearer &lt;token&gt;</code>.[cite: 1]</p>
+    <p><strong>Andere JWT-varianten om te proberen als <code>alg=none</code> niet werkt:</strong> 📘[cite: 1]</p>
+    <ul>
+        <li>Zwak/geraden <code>HS256</code>-secret → <code>jwt_tool</code> of <code>hashcat -m 16500 -a 0 token.txt rockyou.txt</code>.[cite: 1]</li>
+        <li><code>kid</code>-header injectie / algorithm confusion (RS256→HS256) als de server per ongeluk een publieke sleutel als HMAC-secret hergebruikt.[cite: 1]</li>
+        <li>Ontbrekende <code>exp</code>-check → een oud/verlopen token blijft gewoon geldig.[cite: 1]</li>
+        <li><code>jku</code>/<code>x5u</code>-header die naar een URL wijst die jij kan controleren (server haalt daar de verificatiesleutel op).[cite: 1]</li>
+    </ul>
+
+    <h3>4.3 HMAC / signature-aanvallen op JSON — duplicate-key confusion ✅[cite: 1]</h3>
+    <p>Zie Signed, Sealed, Misinterpreted: hergebruik een legitieme signature, stuur een <strong>rauwe string</strong> (geen Python-dict, want die kan geen dubbele keys hebben) met een key (bv. <code>"role"</code>) <strong>twee keer</strong>, in de hoop dat de signature-check en de autorisatielogica elk een andere van de twee waarden gebruiken.[cite: 1]</p>
+    <p><strong>Generaliseer naar andere parsing-mismatches:</strong> 📘[cite: 1]</p>
+    <ul>
+        <li><strong>Unicode-tricks</strong>: <code>"r\u006fle"</code> (unicode-escape voor 'o') kan door de ene parser anders behandeld worden dan door de andere.[cite: 1]</li>
+        <li><strong>Extra/onverwachte velden</strong>: soms valideert de signature-check enkel een subset van velden, en kan je extra velden toevoegen die de autorisatielogica wel leest.[cite: 1]</li>
+        <li><strong>Content-Type verwarring</strong>: dezelfde data als <code>application/json</code> vs <code>application/x-www-form-urlencoded</code> versturen kan soms een andere parser triggeren aan de serverkant.[cite: 1]</li>
+        <li><strong>Timing-attack op MAC-vergelijking</strong>: als een server MAC's vergelijkt met een niet-constant-time <code>==</code> (i.p.v. <code>hmac.compare_digest</code>), kan je in theorie byte per byte raden via responstijd — zelden praktisch haalbaar binnen een CTF-sessie, maar wel een herkenbaar concept.[cite: 1]</li>
+    </ul>
+
+    <h2>5. Public-key cryptografie (RSA, Diffie-Hellman, ECC) 📘[cite: 1]</h2>
+    <p><em>(Nog niet gezien in jullie opgaves, maar hoort standaard bij dit vak — hieronder de meest voorkomende CTF-klassiekers.)[cite: 1]</em></p>
+    <h3>5.1 RSA-aanvallen[cite: 1]</h3>
+    <p>RSA: publieke sleutel <code>(n, e)</code>, privé <code>d</code>, met <code>n = p*q</code> (2 grote priemgetallen).[cite: 1] Versleutelen: <code>c = m^e mod n</code>.[cite: 1] Herken welke situatie van toepassing is:[cite: 1]</p>
+    <table>
+        <tr><th>Signaal</th><th>Aanval</th></tr>
+        <tr><td><code>e = 3</code> (of een andere kleine exponent) en bericht is kort t.o.v. <code>n</code>[cite: 1]</td><td><strong>Cube-root attack</strong>: als <code>m^3 &lt; n</code>, dan is <code>c</code> gewoon <code>m^3</code> zonder modulo-wrap → <code>m = round(c ** (1/3))</code> (met <code>gmpy2.iroot</code> voor exacte integer-cube-root bij grote getallen)[cite: 1]</td></tr>
+        <tr><td>Hetzelfde bericht verstuurd naar <strong>3+ ontvangers</strong> met verschillende <code>n</code>'s, zelfde kleine <code>e</code>[cite: 1]</td><td><strong>Håstad's broadcast attack</strong> — Chinese Reststelling (CRT) combineren en dan e-de-machtswortel nemen[cite: 1]</td></tr>
+        <tr><td>Twee verschillende ciphertexts met <strong>dezelfde modulus <code>n</code></strong>, verschillende <code>e1</code>/<code>e2</code> (vaak co-priem)[cite: 1]</td><td><strong>Common modulus attack</strong> — met extended Euclidean algorithm <code>a*e1 + b*e2 = 1</code> vinden, dan <code>m = c1^a * c2^b mod n</code>[cite: 1]</td></tr>
+        <tr><td><code>p</code> en <code>q</code> liggen <strong>dicht bij elkaar</strong> (beide rond √n)[cite: 1]</td><td><strong>Fermat-factorisatie</strong>: <code>a = ceil(sqrt(n))</code>, test of <code>a² - n</code> een perfect kwadraat is, verhoog <code>a</code> tot dat zo is[cite: 1]</td></tr>
+        <tr><td><code>d</code> (privésleutel) is <strong>klein</strong> t.o.v. <code>n</code>[cite: 1]</td><td><strong>Wiener's attack</strong> — kettingbreuk-expansie van <code>e/n</code> vindt <code>d</code>[cite: 1]</td></tr>
+        <tr><td>Je kent <strong>één van de priemfactoren</strong> (<code>p</code> of <code>q</code>) al, of ze zijn klein genoeg[cite: 1]</td><td>Factoriseer <code>n</code> direct (<code>sympy.factorint(n)</code>, of http://factordb.com — <strong>eerst opzoeken of <code>n</code> al gefactoriseerd in een database staat, zeer vaak het geval in CTF's!</strong>)[cite: 1]</td></tr>
+        <tr><td><code>n</code> is heel klein (&lt; ~100 bits)[cite: 1]</td><td>Brute-force factoriseren met Pollard's rho (<code>sympy.factorint</code>)[cite: 1]</td></tr>
+        <tr><td>Padding-oracle op RSA (PKCS#1 v1.5), server lekt "valid/invalid padding"[cite: 1]</td><td><strong>Bleichenbacher's attack</strong> — complex, zoek op *"Bleichenbacher attack RSA PKCS1"*[cite: 1]</td></tr>
+    </table>
+    <p><strong>Praktisch startpunt voor élke RSA-opgave:</strong>[cite: 1]</p>
+    <pre><code># 1. Probeer eerst factordb.com — vaak is n al bekend/gefactoriseerd
+# 2. Zo niet, test de signalen hierboven in volgorde (klein e → common modulus → Fermat → Wiener)
+from sympy import factorint
+n = ...  # de modulus
+factors = factorint(n)  # werkt enkel voor kleine/kwetsbare n, anders time-out</code></pre>
+    <p><strong>Tool die alles hierboven automatiseert:</strong> <strong>RsaCtfTool</strong> — https://github.com/Ganapati/RsaCtfTool[cite: 1]</p>
+    <pre><code>python3 RsaCtfTool.py --publickey key.pem --uncipherfile ciphertext.bin</code></pre>
+
+    <h3>5.2 Diffie-Hellman-aanvallen[cite: 1]</h3>
+    <p>Standaard DH: beide partijen kiezen geheim <code>a</code>/<code>b</code>, delen <code>A = g^a mod p</code>, <code>B = g^b mod p</code>, gedeelde sleutel <code>g^(ab) mod p</code>.[cite: 1]</p>
+    <ul>
+        <li><strong>Kleine of bekende <code>p</code></strong>: als <code>p</code> klein genoeg is (&lt; ~60 bits), is het discrete-log-probleem (<code>a</code> vinden uit <code>A = g^a mod p</code>) gewoon brute-forceerbaar of met Pollard's rho / baby-step-giant-step op te lossen (<code>sympy.discrete_log(p, A, g)</code>).[cite: 1]</li>
+        <li><strong>Kleine subgroep-aanval</strong>: als <code>p-1</code> veel kleine priemfactoren heeft, kan de geheime exponent <code>mod</code> die kleine factoren gelekt worden (Pohlig-Hellman-algoritme).[cite: 1]</li>
+        <li><strong>Logjam-stijl aanval</strong> (bekende/herbruikte standaard-<code>p</code>-waarden van 512-1024 bit): zoek op *"logjam attack precomputation"*.[cite: 1]</li>
+        <li><strong>MITM zonder authenticatie</strong>: als DH niet aan een signature/certificaat gekoppeld is, kan een attacker tussen beide partijen eigen <code>g^x</code>-waarden insturen.[cite: 1]</li>
+    </ul>
+
+    <h3>5.3 ECDSA / digitale handtekeningen — nonce-hergebruik[cite: 1]</h3>
+    <p>Als twee verschillende berichten <strong>dezelfde "random" nonce <code>k</code></strong> gebruiken bij ECDSA-signing (klassieke implementatiefout, net als bij stream ciphers!), kan je daaruit de <strong>privésleutel</strong> herleiden met simpele modulaire rekenkunde.[cite: 1] Herkenning: twee signatures met dezelfde <code>r</code>-waarde.[cite: 1] Zoek op *"ECDSA nonce reuse attack"* — exact dezelfde "hergebruik-logica" als jullie stream cipher-opgaves, maar dan op een ander wiskundig niveau.[cite: 1]</p>
+
+    <h2>6. Web / API-kwetsbaarheden 📘[cite: 1]</h2>
+    <p><em>(Relevant als een opgave een HTTP-endpoint geeft i.p.v. een raw TCP-socket — zoals Token of Trust / Signed Sealed Misinterpreted.)[cite: 1]</em></p>
+    <table>
+        <tr><th>Kwetsbaarheid</th><th>Herkenning</th><th>Snelle test</th></tr>
+        <tr><td><strong>IDOR</strong> (Insecure Direct Object Reference)[cite: 1]</td><td>URL/body met een ID (<code>/user/1234</code>, <code>"account_id":5</code>)[cite: 1]</td><td>Verhoog/verlaag het ID, kijk of je andermans data ziet[cite: 1]</td></tr>
+        <tr><td><strong>SQL-injectie</strong>[cite: 1]</td><td>Een inputveld voedt vermoedelijk een databasequery[cite: 1]</td><td>Probeer <code>' OR '1'='1</code>, <code>'; --</code>, en kijk naar foutmeldingen die SQL-syntax verraden[cite: 1]</td></tr>
+        <tr><td><strong>SSRF</strong> (Server-Side Request Forgery)[cite: 1]</td><td>De server haalt zelf een URL op die jij (deels) controleert[cite: 1]</td><td>Geef <code>http://localhost/...</code> of <code>http://169.254.169.254/...</code> (cloud-metadata) als URL-parameter[cite: 1]</td></tr>
+        <tr><td><strong>Path traversal</strong>[cite: 1]</td><td>Een bestandsnaam/pad als parameter[cite: 1]</td><td>Probeer <code>../../../../etc/passwd</code> of URL-encoded varianten <code>%2e%2e%2f</code>[cite: 1]</td></tr>
+        <tr><td><strong>Command injection</strong>[cite: 1]</td><td>De server lijkt een shell-commando te bouwen met jouw input[cite: 1]</td><td>Probeer <code>; whoami</code>, <code>`id`</code>, <code>$(whoami)</code>[cite: 1]</td></tr>
+        <tr><td><strong>Open redirect</strong>[cite: 1]</td><td>Een <code>redirect=</code> of <code>next=</code>-parameter[cite: 1]</td><td>Zet 'm op een externe URL, kijk of de server zonder validatie doorstuurt[cite: 1]</td></tr>
+        <tr><td><strong>CSRF</strong>[cite: 1]</td><td>Een actie met side-effects zonder anti-CSRF-token[cite: 1]</td><td>Maak een auto-submit HTML-formulier dat de actie namens een ingelogde gebruiker uitvoert[cite: 1]</td></tr>
+        <tr><td><strong>Insecure Deserialization</strong>[cite: 1]</td><td>Een geserialiseerd object (pickle, Java-serialized, PHP <code>O:</code>) als input[cite: 1]</td><td>Zoek naar bekende gadget chains voor dat framework (bv. <code>ysoserial</code> voor Java)[cite: 1]</td></tr>
+        <tr><td><strong>Verbose errors / stack traces</strong>[cite: 1]</td><td>Elke foutmelding bekijken, ook "onbelangrijke"[cite: 1]</td><td>Soms lekt een stack trace paden, library-versies, of zelfs secrets[cite: 1]</td></tr>
+    </table>
+    <p><strong>Algemene tip:</strong> kijk altijd naar <strong>response headers</strong> (<code>Server:</code>, <code>X-Powered-By:</code>) — die verraden vaak het framework, wat je meteen naar bekende CVE's/kwetsbaarheden voor die specifieke versie kan leiden (zoek op *"{framework} {versie} CVE"*).[cite: 1]</p>
+
+    <h2>7. Encoding &amp; obfuscatie herkennen (vóór je aan "echte crypto" denkt) 📘[cite: 1]</h2>
+    <table>
+        <tr><th>Signaal</th><th>Waarschijnlijk</th><th>Decodeer met</th></tr>
+        <tr><td>Enkel <code>0-9a-f</code>, even aantal karakters[cite: 1]</td><td>Hex[cite: 1]</td><td><code>bytes.fromhex(s)</code>[cite: 1]</td></tr>
+        <tr><td>Letters+cijfers+<code>+</code>/<code>/</code>, eindigt op <code>=</code> of <code>==</code>[cite: 1]</td><td>Base64[cite: 1]</td><td><code>base64.b64decode(s)</code>[cite: 1]</td></tr>
+        <tr><td>Zoals base64 maar met <code>-</code>/<code>_</code> i.p.v. <code>+</code>/<code>/</code>[cite: 1]</td><td>Base64 <strong>URL-safe</strong>[cite: 1]</td><td><code>base64.urlsafe_b64decode(s)</code>[cite: 1]</td></tr>
+        <tr><td>Enkel hoofdletters A-Z en cijfers 2-7[cite: 1]</td><td>Base32[cite: 1]</td><td><code>base64.b32decode(s)</code>[cite: 1]</td></tr>
+        <tr><td><code>%XX</code>-patronen[cite: 1]</td><td>URL-encoding[cite: 1]</td><td><code>urllib.parse.unquote(s)</code>[cite: 1]</td></tr>
+        <tr><td>Tekst blijft leesbaar maar letters lijken verschoven[cite: 1]</td><td>Caesar/ROT13[cite: 1]</td><td><code>codecs.decode(s, 'rot13')</code>, of brute force alle 25 shifts[cite: 1]</td></tr>
+        <tr><td>Drie delen gescheiden door punten, elk base64url[cite: 1]</td><td><strong>JWT</strong>[cite: 1]</td><td>zie §4.2[cite: 1]</td></tr>
+        <tr><td>Lijkt op binaire data met leesbare stukjes ertussen[cite: 1]</td><td>Mogelijk een serialisatieformaat (pickle, protobuf) of gewoon ruwe bytes[cite: 1]</td><td><code>file &lt;bestand&gt;</code>, <code>xxd &lt;bestand&gt; | head</code>[cite: 1]</td></tr>
+        <tr><td>Herhaalde groepjes van exact dezelfde lengte[cite: 1]</td><td>Mogelijk Base85/Ascii85[cite: 1]</td><td><code>base64.a85decode(s)</code>[cite: 1]</td></tr>
+    </table>
+    <p><strong>CyberChef</strong> (https://gchq.github.io/CyberChef/) is de snelste manier om snel door meerdere encoding-lagen te "Magic"-detecteren zonder zelf Python te moeten schrijven — gebruik de <strong>Magic</strong>-operator als je geen idee hebt wat voor encoding iets is.[cite: 1]</p>
+
+    <h2>8. Netwerkanalyse / Wireshark / tshark snelreferentie[cite: 1]</h2>
+    <pre><code># Toon TCP-conversaties (snel zien welke poort/host relevant is)
+tshark -r capture.pcapng -q -z conv,tcp
+
+# Decodeer een niet-standaardpoort als een specifiek protocol
+tshark -r capture.pcapng -d tcp.port==50002,rtsp -Y rtsp
+
+# Volledige inhoud van één frame (headers, alles)
+tshark -r capture.pcapng -Y 'frame.number==10' -O rtsp
+
+# Extract ruwe payload-bytes van een specifiek frame
+tshark -r capture.pcapng -Y 'frame.number==10' -T fields -e tcp.payload
+
+# HTTP-requests/responses snel overzien
+tshark -r capture.pcapng -Y http -T fields -e http.request.full_uri -e http.response.code
+
+# Bestanden/objecten die over HTTP zijn verstuurd uitpakken
+tshark -r capture.pcapng --export-objects http,/tmp/extracted/
+
+# "Follow TCP stream" equivalent in tshark
+tshark -r capture.pcapng -q -z follow,tcp,ascii,0</code></pre>
+    <p>In Wireshark zelf: rechtermuisklik pakket → <strong>Decode As...</strong>, of permanent via <strong>Edit → Preferences → Protocols → &lt;PROTOCOL&gt; → TCP port(s)</strong>.[cite: 1]</p>
+
+    <h2>9. Nuttige Python-snippets[cite: 1]</h2>
+    <pre><code># Veilig blijven lezen van een TCP-socket tot je een bepaalde marker ziet
+def recv_until(sock, marker: str, bufsize=4096) -> str:
+    data = ""
+    while marker not in data:
+        data += sock.recv(bufsize).decode("utf-8", errors="replace")
+    return data
+
+# XOR van twee byte-reeksen (kortste lengte wint)
+def xor_bytes(a: bytes, b: bytes) -> bytes:
+    return bytes(x ^ y for x, y in zip(a, b))
+
+# rockyou.txt robuust inlezen (bevat niet-UTF8 troep) zonder alles in het geheugen te laden
+with open("rockyou.txt", encoding="utf-8", errors="ignore") as f:
+    passwords = (line.rstrip("\n") for line in f)   # generator!
+
+# Snel een onbekende blob proberen te identificeren/decoderen
+import base64, binascii
+def guess_decode(s: str):
+    for name, fn in [
+        ("hex", lambda x: bytes.fromhex(x)),
+        ("base64", lambda x: base64.b64decode(x)),
+        ("base64url", lambda x: base64.urlsafe_b64decode(x + "=" * (-len(x) % 4))),
+        ("base32", lambda x: base64.b32decode(x)),
+    ]:
+        try:
+            print(name, "->", fn(s))
+        except Exception:
+            pass</code></pre>
+
+    <h2>10. Tooling-cheatsheet[cite: 1]</h2>
+    <table>
+        <tr><th>Taak</th><th>Tool / commando</th></tr>
+        <tr><td>Wachtwoord-hash kraken (algemeen, GPU-versneld)[cite: 1]</td><td><code>hashcat -m &lt;mode&gt; -a 0 hash.txt rockyou.txt</code> — mode 0=MD5, 100=SHA1, 1400=SHA256, 16500=JWT HS256[cite: 1]</td></tr>
+        <tr><td>Wachtwoord-hash kraken (CPU, flexibel)[cite: 1]</td><td><code>john --wordlist=rockyou.txt hash.txt</code>[cite: 1]</td></tr>
+        <tr><td>JWT-aanvallen automatiseren[cite: 1]</td><td><code>jwt_tool</code> — https://github.com/ticarpi/jwt_tool[cite: 1]</td></tr>
+        <tr><td>RSA-aanvallen automatiseren[cite: 1]</td><td><code>RsaCtfTool</code> — https://github.com/Ganapati/RsaCtfTool[cite: 1]</td></tr>
+        <tr><td>Gefactoriseerde/bekende RSA-moduli opzoeken[cite: 1]</td><td>https://factordb.com[cite: 1]</td></tr>
+        <tr><td>Encoding/crypto snel uitproberen in de browser[cite: 1]</td><td>https://gchq.github.io/CyberChef/[cite: 1]</td></tr>
+        <tr><td>Algemene decoder (Caesar, Vigenère, enz.)[cite: 1]</td><td>https://www.dcode.fr/[cite: 1]</td></tr>
+        <tr><td>OpenSSL — certificaat/sleutel inspecteren[cite: 1]</td><td><code>openssl x509 -in cert.pem -text -noout</code>[cite: 1]</td></tr>
+        <tr><td>OpenSSL — RSA-sleutel info[cite: 1]</td><td><code>openssl rsa -in key.pem -text -noout</code>[cite: 1]</td></tr>
+        <tr><td>OpenSSL — snel AES/DES encrypt/decrypt testen[cite: 1]</td><td><code>openssl enc -aes-128-ecb -d -K &lt;hexkey&gt; -in ct.bin -out pt.bin</code>[cite: 1]</td></tr>
+        <tr><td>Padding-oracle automatiseren[cite: 1]</td><td><code>padbuster</code>[cite: 1]</td></tr>
+        <tr><td>Hash length-extension automatiseren[cite: 1]</td><td><code>hashpump</code> — https://github.com/bwall/HashPump[cite: 1]</td></tr>
+        <tr><td>Python length-extension library[cite: 1]</td><td><code>pip install hlextend</code>[cite: 1]</td></tr>
+        <tr><td>Mersenne Twister state recovery[cite: 1]</td><td><code>pip install randcrack</code>[cite: 1]</td></tr>
+    </table>
+
+    <h2>11. Bronnen om snel te doorzoeken tijdens de sessie[cite: 1]</h2>
+    <table>
+        <tr><th>Onderwerp</th><th>Bron</th></tr>
+        <tr><td>JWT uitleg + live decoder[cite: 1]</td><td>https://jwt.io/introduction[cite: 1]</td></tr>
+        <tr><td>JWT/HMAC/algemene web-labs, stap-voor-stap[cite: 1]</td><td>https://pentesterlab.com/exercises[cite: 1]</td></tr>
+        <tr><td>Web-kwetsbaarheden algemeen (IDOR, SSRF, SQLi...)[cite: 1]</td><td>https://portswigger.net/web-security[cite: 1]</td></tr>
+        <tr><td>Digest Authentication (RFC's)[cite: 1]</td><td>https://en.wikipedia.org/wiki/Digest_access_authentication[cite: 1]</td></tr>
+        <tr><td>Padding Oracle (CBC)[cite: 1]</td><td>https://robertheaton.com/2013/07/29/padding-oracle-attack/[cite: 1]</td></tr>
+        <tr><td>Length-extension attack[cite: 1]</td><td>https://en.wikipedia.org/wiki/Length_extension_attack[cite: 1]</td></tr>
+        <tr><td>Meet-in-the-Middle (2DES voorbeeld)[cite: 1]</td><td>https://en.wikipedia.org/wiki/Meet-in-the-middle_attack[cite: 1]</td></tr>
+        <tr><td>Birthday attack / collision[cite: 1]</td><td>https://en.wikipedia.org/wiki/Birthday_attack[cite: 1]</td></tr>
+        <tr><td>RSA-aanvallen overzicht[cite: 1]</td><td>https://github.com/Ganapati/RsaCtfTool (README geeft goed overzicht van alle aanvalstypes)[cite: 1]</td></tr>
+        <tr><td>Wiener's attack uitleg[cite: 1]</td><td>zoek *"Wiener's attack RSA continued fraction"*[cite: 1]</td></tr>
+        <tr><td>Diffie-Hellman / Logjam[cite: 1]</td><td>https://weakdh.org/[cite: 1]</td></tr>
+        <tr><td>ECDSA nonce reuse[cite: 1]</td><td>zoek *"ECDSA nonce reuse attack explained"*[cite: 1]</td></tr>
+        <tr><td>AES/GF(2⁸) theorie[cite: 1]</td><td>eigen cursusslides (Stallings, hoofdstuk 5)[cite: 1]</td></tr>
+        <tr><td>CyberChef[cite: 1]</td><td>https://gchq.github.io/CyberChef/[cite: 1]</td></tr>
+        <tr><td>MD5-collisies kant-en-klaar[cite: 1]</td><td>https://github.com/corkami/collisions[cite: 1]</td></tr>
+        <tr><td>algemene wiki met veel pentesting[cite: 1]</td><td>https://book.hacktricks.xyz/[cite: 1]</td></tr>
+        <tr><td>github with lots of attacks[cite: 1]</td><td>https://github.com/swisskyrepo/PayloadsAllTheThings[cite: 1]</td></tr>
+    </table>
+
+    <h2>12. Custom rotor-/machine-cijfers (zoals "My First Enigma Machine") ✅[cite: 1]</h2>
+    <p><strong>Herkenning:</strong> de opgave beschrijft in woorden een EIGEN, volledig custom "machine" (géén bestaande, opzoekbare cipher) met alfabetten/rotoren die na elke letter <strong>roteren</strong>, waarbij een volgende rotor pas draait als de vorige een volledige cyclus gemaakt heeft (klassiek "odometer"-mechanisme, zoals de echte Enigma).[cite: 1] <strong>Dit kan je nergens opzoeken — je MOET het zelf simuleren en programmeren.</strong>[cite: 1] Precies het soort vraag waar de docent op doelde met "net niet op te zoeken".[cite: 1]</p>
+    
+    <h3>De sleutel tot dit type opgave[cite: 1]</h3>
+    <p>Bij een "zuivere" rotor-machine (zonder reflector/plugboard) hangt de rotatie van elke rotor <strong>enkel af van hoeveel letters al verwerkt zijn</strong> — <strong>niet</strong> van de inhoud van het bericht.[cite: 1] Dat betekent:[cite: 1]</p>
+    <ol>
+        <li>Je kan de rotor-standen voor élke positie <strong>voorberekenen</strong>, los van wat het plaintext/ciphertext is.[cite: 1]</li>
+        <li>Elke stap is gewoon een <strong>substitutie (permutatie)</strong> — en permutaties zijn altijd omkeerbaar met <code>.index()</code> in plaats van <code>rotor[index]</code>.[cite: 1]</li>
+        <li><strong>Decrypteren = de pijplijn in omgekeerde volgorde doorlopen</strong>, met <code>.index()</code> i.p.v. direct indexeren, bij elke rotor.[cite: 1]</li>
+    </ol>
+    
+    <h3>Bevestigd opgelost voorbeeld[cite: 1]</h3>
+    <p>Opgave: 3 rotoren (<code>MACHINEBDFGJKLOPQRSTUVWXYZ</code>, <code>ORBITACDEFGHJKLMNPQSUVWXYZ</code>, <code>CIPHERABDFGJKLMNOQSTUVWXYZ</code>), Rotor 1 roteert elke letter, Rotor 2 roteert als Rotor 1 een volledige cyclus (26 letters) gemaakt heeft, Rotor 3 als Rotor 2 een volledige cyclus gemaakt heeft.[cite: 1] Geen reflector (1 richting).[cite: 1]<br>
+    Ciphertext <code>HKV{BSBU-B-SJYZNNB-DNFW-IXH-YTA-RPL-RTXOLWFQ}</code> → <strong><code>CNS{JOHN-F-KENNEDY-SAID-ICH-BIN-EIN-BERLINER}</code></strong>.[cite: 1]<br>
+    Volledig werkend script: <strong><code>18_custom_rotor_cipher_enigma.py</code></strong>.[cite: 1]</p>
+    
+    <h3>Mogelijke varianten die de docent kan geven (zelf op voorbereid, nog niet bevestigd) 📘[cite: 1]</h3>
+    <p>Lees de opgavetekst heel precies — elk detail hieronder kan het verschil maken:[cite: 1]</p>
+    <table>
+        <tr><th>Variant</th><th>Wat verandert er</th><th>Hoe aan te passen</th></tr>
+        <tr><td><strong>A — niet-letters tellen mee voor rotatie</strong>[cite: 1]</td><td><code>-</code>/<code>{</code>/spaties laten de rotor ook draaien, ook al worden ze zelf niet vervangen[cite: 1]</td><td>Haal de rotatie-skip weg voor niet-letters, behoud enkel de substitutie-skip[cite: 1]</td></tr>
+        <tr><td><strong>B — reflector</strong> (zoals de ECHTE Enigma)[cite: 1]</td><td>Signaal gaat heen ÉN terug door de rotoren (R1→R2→R3→reflector→R3→R2→R1)[cite: 1]</td><td>Reflector is een zelf-inverse permutatie (reflector[x]=y ⟹ reflector[y]=x, x≠y); pas 'm toe na de laatste rotor, loop dan terug met dezelfde (al-geroteerde) staat[cite: 1]</td></tr>
+        <tr><td><strong>C — ander rotatie-ritme</strong>[cite: 1]</td><td>Een rotor schakelt niet na 26 maar na een ander/specifiek aantal stappen, of op een genoemde "notch"-letter[cite: 1]</td><td>Pas <code>advance_every</code> aan; zoek in de opgavetekst naar een concreet getal of letter[cite: 1]</td></tr>
+        <tr><td><strong>D — plugboard</strong>[cite: 1]</td><td>Extra vaste letter-swap vóór/na de rotoren (A↔Q, B↔W, ...)[cite: 1]</td><td>Simpele dict toepassen voor en na de rotor-pijplijn[cite: 1]</td></tr>
+        <tr><td><strong>E — niet-nul startpositie</strong>[cite: 1]</td><td>"Rotors started at 5, 2, 9" i.p.v. 0,0,0[cite: 1]</td><td>Roteer elk rotor-alfabet dat aantal keer vooraf, voor je begint te verwerken[cite: 1]</td></tr>
+        <tr><td><strong>F — meer/minder rotoren, of een andere rotatie-RICHTING</strong> (rotor naar rechts i.p.v. links roteren)[cite: 1]</td><td>Het aantal rotoren is willekeurig uit te breiden; rotatie-richting kan omgekeerd[cite: 1]</td><td>Pas <code>rotate()</code> aan: <code>s[-1] + s[:-1]</code> voor rotatie naar rechts i.p.v. <code>s[1:] + s[0]</code>[cite: 1]</td></tr>
+        <tr><td><strong>G — data-afhankelijke rotatie</strong> (ongebruikelijk, lastiger)[cite: 1]</td><td>De rotatie hangt AF van de ingevoerde letter zelf (niet enkel positie)[cite: 1]</td><td>Dan kan je NIET vooraf alle standen berekenen — je moet dan vanaf het begin, letter per letter, zowel voorspellen welke rotatie moet gebeuren (afhankelijk van het nog onbekende plaintext) ALS de substitutie omkeren.[cite: 1] Vaak enkel haalbaar als je toch een stuk known-plaintext hebt om het patroon te ontdekken.[cite: 1]</td></tr>
+    </table>
+    <p><strong>Algemene programmeer-tip voor élk van deze varianten:</strong> schrijf EERST de <code>encrypt()</code>-functie (forward-richting) exact zoals de opgave het beschrijft, en TEST die met een klein voorbeeld als de opgave er een geeft (zoals het "Rotor 1 becomes: ACHINEBDFGJKLOPQRSTUVWXYZM"-voorbeeldje).[cite: 1] Pas als je zeker weet dat je <code>encrypt()</code> klopt, bouw je <code>decrypt()</code> als het exacte spiegelbeeld.[cite: 1] Dat voorkomt dat je half-begrepen logica probeert om te keren.[cite: 1]</p>
+
+    <h2>13. Nog openstaand / expliciet onzeker[cite: 1]</h2>
+    <ul>
+        <li><strong>AES 2 demo version</strong>: methodologie (MITM, §2.2) staat klaar, maar ik heb nooit het echte <code>enc.bmp</code>-bestand gezien, dus ik weet niet of het known-plaintext-blok (BMP-header) klopte of wat de uiteindelijke flag was.[cite: 1]</li>
+        <li><strong>Secure Bank 1 — exacte eindflag</strong>: de bit-flip-methode werkt bevestigd (<code>Transfer of X EUR to bob processed</code>), maar check zelf of een bedrag als "100000" een foutmelding geeft (validatie-bereik) en pas zo nodig aan.[cite: 1]</li>
+        <li><strong>§5, §6, §7 zijn algemene/aanpalende theorie</strong>, niet getest op jullie specifieke challenge-server — behandel ze als "waar te beginnen zoeken" als je zoiets tegenkomt, niet als kant-en-klare oplossing.[cite: 1]</li>
+    </ul>
+    <p><strong>Succes morgen!</strong> Bij twijfel: terug naar §0, en vraag je af welk vakje het best past bij wat de opgavetekst je vertelt.[cite: 1]</p>
+</div>
+
+<hr>
+
+<div class="document-section" id="file2">
+    <h1>Computer &amp; Network Security — Hacking Session Cheatsheet (uitgebreide versie)[cite: 2]</h1>
+    <p><em>Gebaseerd op jullie opgeloste oefeningen + algemene/aanpalende technieken voor varianten die nog niet aan bod kwamen (RSA, Diffie-Hellman, web-kwetsbaarheden, encodings, tooling).[cite: 2]</em></p>
+    
+    <blockquote>
+        <strong>Leeswijzer:</strong> ✅ = bevestigd door jullie eigen testen.[cite: 2] 📘 = algemene, publiek gedocumenteerde techniek (nog niet zelf getest op deze specifieke server) — betrouwbare theorie, maar verifieer de details live.[cite: 2] Secties zijn zo opgebouwd dat je op "herkenning" kan zoeken (Ctrl+F) als je een opgavetekst voor je hebt.[cite: 2]
+    </blockquote>
+
+    <h2>0. De meta-methodologie — stel dit jezelf bij ELKE opgave[cite: 2]</h2>
+    <ol>
+        <li><strong>Categorie op de site?</strong> (Stream Ciphers / Block Ciphers / Hashing / HMAC / Public-Key / Web...) → beperkt meteen de mogelijke aanvallen.[cite: 2]</li>
+        <li><strong>Wordt een sleutel/nonce/seed/IV hergebruikt</strong> tussen twee berichten? → <strong>two-time pad</strong>.[cite: 2]</li>
+        <li><strong>Encryptie zonder authenticatie</strong> (geen MAC/HMAC/signature)? → <strong>bit-flipping / malleability</strong>.[cite: 2]</li>
+        <li><strong>Kleine of voorspelbare sleutelruimte</strong> expliciet vermeld (bv. "20-bit", "standardised keys", "short password")? → <strong>brute force</strong> of <strong>meet-in-the-middle</strong>.[cite: 2]</li>
+        <li><strong>Zelfgeschreven/"home-made" hash of cipher</strong> (geen AES/SHA uit een standaardbibliotheek)? → waarschijnlijk <strong>omkeerbaar</strong> (XOR/shift/rotate zijn allemaal inverteerbaar).[cite: 2]</li>
+        <li><strong>Fingerprint/hash "afgekapt" of goedkoop opgeslagen</strong> ("we don't have enough space/money to store the full X")? → <strong>birthday-attack / collision</strong>.[cite: 2]</li>
+        <li><strong>Een JWT</strong> (drie base64url-delen, gescheiden door punten)? → decodeer, kijk naar <code>alg</code>, probeer <code>alg=none</code> of zwak secret.[cite: 2]</li>
+        <li><strong>Een signature/HMAC-header bij JSON</strong>? → kijk naar <strong>canonicalisatie/parsing-mismatch</strong> (dubbele keys, volgorde, witruimte, encoding).[cite: 2]</li>
+        <li><strong>Server vraagt je een "volgende code" te voorspellen</strong>? → <strong>hash chain</strong>, en let op raw bytes vs hex-string![cite: 2]</li>
+        <li><strong>RSA-achtige getallen</strong> (<code>n</code>, <code>e</code>, <code>d</code>, grote priemgetallen, modulus)? → zie §5 (RSA-aanvallen): kijk eerst naar de grootte van <code>e</code> en of <code>n</code> factoriseerbaar is.[cite: 2]</li>
+        <li><strong>Diffie-Hellman-parameters</strong> (<code>g</code>, <code>p</code>, publieke sleutels <code>A</code>/<code>B</code>)? → zie §5.2: is <code>p</code> klein/standaard? Is de subgroep klein?[cite: 2]</li>
+        <li><strong>Een URL met een parameter die een ID/pad/URL bevat</strong>, of een inlog-/sessiesysteem? → denk web-kwetsbaarheden (§6): IDOR, SSRF, path traversal, SQLi, open redirect.[cite: 2]</li>
+        <li><strong>Een onherkenbare blob tekst</strong> (letters+cijfers, of enkel hex, of <code>==</code> op het einde)? → zie §7 (encoding-herkenning) vóór je aan "echte crypto" denkt — soms is het gewoon base64/hex/rot13.[cite: 2]</li>
+        <li><strong>Timing-gevoelige foutmeldingen</strong> ("invalid password" vs "invalid username", of merkbaar tragere responses)? → denk aan <strong>timing attacks</strong> / <strong>oracle-aanvallen</strong> (§2.4, §6).[cite: 2]</li>
+    </ol>
+
+    <h2>1. Stream Cipher aanvallen[cite: 2]</h2>
+    <h3>1.1 Keystream/seed hergebruik → Two-time pad ✅[cite: 2]</h3>
+    <p><strong>Herkenning:</strong> twee berichten versleuteld met "dezelfde configuratie/seed/nonce".[cite: 2]</p>
+    <pre><code>keystream = bytes(c ^ p for c, p in zip(ciphertext_known, plaintext_known))
+flag = bytes(c ^ k for c, k in zip(ciphertext_secret, keystream))</code></pre>
+    <p>Toegepast op: <strong>Replanting</strong>, <strong>Noncense</strong>.[cite: 2]</p>
+    <p><strong>Variant — N berichten, allemaal met dezelfde keystream (klassiek "many-time pad"):</strong> 📘[cite: 2]<br>
+    Als je 3+ ciphertexts met dezelfde keystream hebt zonder een volledig known-plaintext, kan je per bytepositie met frequentie-analyse werken: XOR elk paar ciphertexts (<code>c1^c2 = p1^p2</code>), en gok dat één van de plaintexts op die positie een spatie (<code>0x20</code>) is — spaties XOR'en met letters geven herkenbare patronen (hoofdletter↔kleine letter verschuiving).[cite: 2] Tool: <code>python3 -m venv</code> + <code>xortool</code>, of het CTF-klassieke "crib dragging".[cite: 2]</p>
+
+    <h3>1.2 Zwakke PRNG / state recovery (custom LCG, enz.) ✅[cite: 2]</h3>
+    <p>Zie je eigen uitgewerkte voorbeeld (Replanting).[cite: 2] Generaliseer: elke keer dat je een <strong>custom RNG</strong> ziet met gekende formule (<code>next = (A*state + C) mod M</code>, of een LFSR, of Mersenne Twister met voorspelbare seed zoals <code>time.time()</code>), probeer de <strong>interne state te reconstrueren</strong> uit gedeeltelijke output.[cite: 2]</p>
+    <ul>
+        <li><strong>Mersenne Twister (Python's <code>random</code>)</strong>: als je 624 opeenvolgende 32-bit outputs ziet, kan je de volledige interne state klonen met tools als <code>randcrack</code> (<code>pip install randcrack</code>) en daarna toekomstige "willekeurige" waarden perfect voorspellen.[cite: 2]</li>
+        <li><strong>Geseed met tijd</strong> (<code>random.seed(int(time.time()))</code>): brute force de seed over een klein tijdvenster rond het moment van de request.[cite: 2]</li>
+    </ul>
+
+    <h3>1.3 Malleability / bit-flipping (geen MAC) ✅[cite: 2]</h3>
+    <p>Zie uitgewerkt voorbeeld (Secure Bank 1).[cite: 2] Kernformule:[cite: 2]</p>
+    <pre><code>keystream = bytes(c ^ p for c, p in zip(ciphertext, known_plaintext))
+new_ciphertext = bytes(k ^ p for k, p in zip(keystream, new_desired_plaintext))</code></pre>
+    <p><strong>Let op:</strong> keystream hangt af van nonce — blijf binnen dezelfde sessie werken.[cite: 2]</p>
+    <p><strong>Variant — CTR-counter manipulatie:</strong> 📘 bij AES-CTR kan je, als je de counter/nonce-opbouw kent, ook <strong>blokken van positie laten wisselen</strong> door de counter-waarde in de ciphertext-aanvraag te forceren naar een waarde die al elders gebruikt is (vergelijkbaar met nonce-reuse, maar dan actief uitgelokt in plaats van toevallig).[cite: 2]</p>
+
+    <h3>1.4 RC4-specifieke zwaktes 📘[cite: 2]</h3>
+    <p>Als je ooit RC4 tegenkomt: de eerste paar keystream-bytes zijn statistisch <strong>niet</strong> uniform willekeurig (bekende bias in byte 0 en 1).[cite: 2] Bij hergebruikte/voorspelbare sleutels (WEP-stijl) kan je met voldoende samples de sleutel herleiden (FMS-attack, KoreK-attacks).[cite: 2] Tool: <code>aircrack-ng</code> als het om WEP gaat.[cite: 2]</p>
+
+    <h2>2. Block Cipher aanvallen[cite: 2]</h2>
+    <h3>2.1 Kleine/voorspelbare sleutelruimte → brute force ✅[cite: 2]</h3>
+    <p>Zie Key Standardisation.[cite: 2] Probeer sleutels afgeleid van bekende strings (naam, namespace, bedrijfsnaam), met padding-varianten (nullen vooraan/achteraan, herhaling, hoofdletters/kleine letters), en brute force resterende onbekende tekens als die beperkt zijn.[cite: 2]</p>
+
+    <h3>2.2 Double/meervoudige encryptie → Meet-in-the-Middle ✅[cite: 2]</h3>
+    <p>Zie AES 2 demo.[cite: 2] <code>Enc(K1,P) = Dec(K2,C)</code> → bouw een hashtabel voor alle K1, zoek voor elke K2.[cite: 2]</p>
+    <pre><code>table = {}
+for k1 in range(2**20):
+    table[AES_encrypt(make_key(k1), P)] = k1
+for k2 in range(2**20):
+    mid = AES_decrypt(make_key(k2), C)
+    if mid in table:
+        print("K1 =", table[mid], "K2 =", k2)</code></pre>
+    <p>Vereist een bekend (plaintext-blok, ciphertext-blok)-paar van hetzelfde blok (bestandsheaders zijn goud: BMP <code>"BM"</code>, PNG <code>\x89PNG</code>, JPEG <code>\xFF\xD8\xFF</code>, ZIP <code>PK\x03\x04</code>, PDF <code>%PDF-</code>, GIF <code>GIF89a</code>).[cite: 2]</p>
+
+    <h3>2.3 Mode-herkenning (ECB vs CBC vs CTR/stream) 📘[cite: 2]</h3>
+    <table>
+        <tr><th>Signaal</th><th>Betekent</th></tr>
+        <tr><td>Identieke 16-byte blokken verschijnen herhaaldelijk in de ciphertext[cite: 2]</td><td><strong>ECB</strong> — patronen in plaintext blijven zichtbaar[cite: 2]</td></tr>
+        <tr><td>Afbeelding versleuteld met ECB blijft "herkenbaar" (vormen zichtbaar)[cite: 2]</td><td><strong>ECB</strong> — klassieke demo: het Linux-pinguïn-voorbeeld[cite: 2]</td></tr>
+        <tr><td>Lengte van ciphertext = lengte plaintext + een veelvoud van blokgrootte (padding)[cite: 2]</td><td>Blockmode met padding (CBC meestal)[cite: 2]</td></tr>
+        <tr><td>Lengte ciphertext ≈ lengte plaintext + vaste kleine offset (8 of 12-16 bytes)[cite: 2]</td><td><strong>Stream-achtige mode (CTR/GCM/stream cipher)</strong> met nonce/IV ervoor[cite: 2]</td></tr>
+        <tr><td>Wijziging van 1 ciphertext-byte verandert <strong>1 hele blok</strong> willekeurig bij decryptie, en de rest blijft normaal, maar het <strong>volgende</strong> blok krijgt exact diezelfde bit-flip[cite: 2]</td><td><strong>CBC</strong> (bit-flip propageert typisch)[cite: 2]</td></tr>
+        <tr><td>Wijziging van 1 ciphertext-byte verandert <strong>slechts dat ene byte</strong> bij decryptie[cite: 2]</td><td><strong>Stream cipher / CTR / OFB</strong> (XOR-gebaseerd, malleable — zie §1.3)[cite: 2]</td></tr>
+    </table>
+
+    <h3>2.4 CBC Padding Oracle Attack 📘[cite: 2]</h3>
+    <p><strong>Herkenning:</strong> CBC-mode, en de server geeft een <strong>ander soort foutmelding</strong> (of merkbaar ander gedrag/timing) bij "invalid padding" versus "valid padding maar ongeldige data".[cite: 2]</p>
+    <p><strong>Principe (kort):</strong> PKCS#7-padding betekent dat de laatste bytes van het plaintext aangeven hoeveel paddingbytes er zijn (bv. laatste byte <code>0x04</code> → de laatste 4 bytes moeten allemaal <code>0x04</code> zijn).[cite: 2] Door <strong>de voorlaatste ciphertext-blok byte per byte te wijzigen</strong> en te kijken of de server "padding OK" of "padding FOUT" zegt, kan je <strong>elke byte van het plaintext</strong> achterhalen — zonder de sleutel te kennen, puur via dat ja/nee-signaal.[cite: 2] Je werkt van de laatste byte van een blok naar de eerste.[cite: 2]</p>
+    <pre><code># Zeer vereenvoudigd skelet — pas de oracle-functie aan je server aan
+def padding_oracle(iv_block, cipher_block):
+    # stuur iv_block + cipher_block naar de server, return True als "padding valid"
+    ...
+
+def decrypt_block(prev_block, target_block):
+    intermediate = bytearray(16)
+    plaintext = bytearray(16)
+    for pad_val in range(1, 17):
+        pos = 16 - pad_val
+        fake_prev = bytearray(16)
+        for i in range(pos+1, 16):
+            fake_prev[i] = intermediate[i] ^ pad_val
+        for guess in range(256):
+            fake_prev[pos] = guess
+            if padding_oracle(bytes(fake_prev), target_block):
+                intermediate[pos] = guess ^ pad_val
+                plaintext[pos] = intermediate[pos] ^ prev_block[pos]
+                break
+    return bytes(plaintext)</code></pre>
+    <p><strong>Bron:</strong> https://robertheaton.com/2013/07/29/padding-oracle-attack/ · tool: <code>padbuster</code>.[cite: 2]</p>
+
+    <h3>2.5 Related-key / weak-key varianten (DES-specifiek) 📘[cite: 2]</h3>
+    <p>DES heeft 4 bekende <strong>zwakke sleutels</strong> (en 12 semi-zwakke) waarbij encryptie = decryptie (self-inverse).[cite: 2] Als een opgave specifiek over "DES weak keys" gaat: zoek op *"DES weak keys list"* — er zijn er maar 4, triviaal te proberen.[cite: 2]</p>
+
+    <h2>3. Hash-functie aanvallen[cite: 2]</h2>
+    <h3>3.1 Zelfgeschreven ("home-made") hash → omkeren ✅[cite: 2]</h3>
+    <p>Zie Better Hash.[cite: 2] Keer rondevolgorde + stapvolgorde om, vervang elke operatie door haar inverse (XOR↔XOR, rol↔ror, prefix-XOR-ketting loop je van hoog naar laag, lijstrotatie omgekeerd).[cite: 2]</p>
+
+    <h3>3.2 Afgekapte hash / fingerprint → Birthday-attack ✅[cite: 2]</h3>
+    <p>Zie Secure Bank 2.[cite: 2] Met *n*-bit afgekapte hash vind je een collision in ~2^(n/2) pogingen i.p.v. 2^n.[cite: 2]<br>
+    <strong>Vuistregel-tabel:</strong>[cite: 2]</p>
+    <table>
+        <tr><th>Fingerprint-lengte</th><th>Collision na ongeveer</th></tr>
+        <tr><td>16 bits (4 hex)[cite: 2]</td><td>~256 pogingen[cite: 2]</td></tr>
+        <tr><td>24 bits (6 hex)[cite: 2]</td><td>~4.096 pogingen[cite: 2]</td></tr>
+        <tr><td>32 bits (8 hex)[cite: 2]</td><td>~65.536 pogingen[cite: 2]</td></tr>
+        <tr><td>40 bits (10 hex)[cite: 2]</td><td>~1M pogingen[cite: 2]</td></tr>
+        <tr><td>48 bits (12 hex)[cite: 2]</td><td>~16M pogingen (nog steeds seconden-minuten)[cite: 2]</td></tr>
+    </table>
+
+    <h3>3.3 Hash chain voorspellen ✅[cite: 2]</h3>
+    <p>Zie Space Race 1.[cite: 2] <strong>Hash de ruwe bytes</strong>, niet de hex-tekst: <code>bytes.fromhex(code)</code>, niet <code>code.encode()</code>.[cite: 2]</p>
+
+    <h3>3.4 Hash length-extension attack 📘[cite: 2]</h3>
+    <p><strong>Herkenning:</strong> een MAC geconstrueerd als <code>hash(secret || message)</code> (géén echte HMAC) met MD5/SHA-1/SHA-256 (Merkle–Damgård-constructies zijn hier kwetsbaar aan, SHA-3/BLAKE2 niet).[cite: 2] Je kent <code>hash(secret||message)</code> en de lengte van <code>message</code>, maar niet <code>secret</code> zelf — en je wil data <strong>achteraan toevoegen</strong> met een geldige nieuwe hash.[cite: 2]</p>
+    <pre><code>pip install hlextend --break-system-packages</code></pre>
+    <pre><code>import hlextend
+sha = hlextend.new('sha256')  # of 'sha1', 'md5'
+new_hash = sha.extend(
+    data=b";admin=true",          # wat je wil toevoegen
+    secret=b"origineel_bericht",  # het bericht zoals jij het kent (zonder secret)
+    secret_length=16,             # GOK/brute-force de lengte van de geheime sleutel (probeer 1..64)
+    hexdigest="originele_mac_hex"
+)
+new_message = sha.hexdigest()     # dit stuur je ipv het origineel, met new_hash als MAC</code></pre>
+    <p><strong>Belangrijkste denkstap:</strong> als je de secret-lengte niet kent, loop je gewoon over een plausibel bereik (1 t.e.m. 32 of 64 bytes) en probeer je elke <code>new_message</code>/<code>new_hash</code>-combinatie tot de server er één accepteert.[cite: 2]<br>
+    <strong>Bron:</strong> https://en.wikipedia.org/wiki/Length_extension_attack · CLI-tool: <code>hashpump</code> (https://github.com/bwall/HashPump)[cite: 2]</p>
+
+    <h3>3.5 Hash-identificatie op lengte 📘[cite: 2]</h3>
+    <table>
+        <tr><th>Hex-lengte</th><th>Bits</th><th>Waarschijnlijk algoritme</th></tr>
+        <tr><td>32[cite: 2]</td><td>128[cite: 2]</td><td>MD5[cite: 2]</td></tr>
+        <tr><td>40[cite: 2]</td><td>160[cite: 2]</td><td>SHA-1[cite: 2]</td></tr>
+        <tr><td>56[cite: 2]</td><td>224[cite: 2]</td><td>SHA-224[cite: 2]</td></tr>
+        <tr><td>64[cite: 2]</td><td>256[cite: 2]</td><td>SHA-256[cite: 2]</td></tr>
+        <tr><td>96[cite: 2]</td><td>384[cite: 2]</td><td>SHA-384[cite: 2]</td></tr>
+        <tr><td>128[cite: 2]</td><td>512[cite: 2]</td><td>SHA-512[cite: 2]</td></tr>
+        <tr><td>variabel, <code>$</code>-gescheiden[cite: 2]</td><td>—[cite: 2]</td><td>bcrypt/scrypt/argon2 (herkenbaar aan prefix <code>$2b$</code>, <code>$argon2id$</code>, enz.)[cite: 2]</td></tr>
+    </table>
+
+    <h3>3.6 Known collision-tools voor MD5/SHA-1 📘[cite: 2]</h3>
+    <p>Als een opgave vraagt om <strong>twee verschillende bestanden/berichten met dezelfde volle MD5 of SHA-1</strong> te maken (niet afgekapt): gebruik bestaande, publiek beschikbare collision-generators — zelf zoeken naar een collision is onbegonnen werk.[cite: 2]</p>
+    <ul>
+        <li>MD5: https://github.com/corkami/collisions (kant-en-klare MD5-collision-paren en -tools)[cite: 2]</li>
+        <li>SHA-1: "SHAttered" PDF-collisie-aanpak: https://shattered.io/[cite: 2]</li>
+    </ul>
+
+    <h2>4. Authenticatie-protocollen &amp; MAC's[cite: 2]</h2>
+    <h3>4.1 HTTP/RTSP Digest Authentication — offline dictionary attack ✅[cite: 2]</h3>
+    <p>Zie Security Cam.[cite: 2] RFC 2069 (geen <code>qop</code>): <code>response = MD5(MD5(user:realm:pass):nonce:MD5(method:uri))</code>.[cite: 2]<br>
+    Geen <code>print()</code> per poging in de loop — dat maakt het uren trager.[cite: 2]</p>
+
+    <h3>4.2 JWT-aanvallen — <code>alg: none</code> ✅[cite: 2]</h3>
+    <p>Zie Token of Trust: decodeer header+payload, <code>alg</code>→<code>none</code>, rechten verhogen, her-encoderen, signature-deel leeg laten, versturen als <code>Authorization: Bearer &lt;token&gt;</code>.[cite: 2]</p>
+    <p><strong>Andere JWT-varianten om te proberen als <code>alg=none</code> niet werkt:</strong> 📘[cite: 2]</p>
+    <ul>
+        <li>Zwak/geraden <code>HS256</code>-secret → <code>jwt_tool</code> of <code>hashcat -m 16500 -a 0 token.txt rockyou.txt</code>.[cite: 2]</li>
+        <li><code>kid</code>-header injectie / algorithm confusion (RS256→HS256) als de server per ongeluk een publieke sleutel als HMAC-secret hergebruikt.[cite: 2]</li>
+        <li>Ontbrekende <code>exp</code>-check → een oud/verlopen token blijft gewoon geldig.[cite: 2]</li>
+        <li><code>jku</code>/<code>x5u</code>-header die naar een URL wijst die jij kan controleren (server haalt daar de verificatiesleutel op).[cite: 2]</li>
+    </ul>
+
+    <h3>4.3 HMAC / signature-aanvallen op JSON — duplicate-key confusion ✅[cite: 2]</h3>
+    <p>Zie Signed, Sealed, Misinterpreted: hergebruik een legitieme signature, stuur een <strong>rauwe string</strong> (geen Python-dict, want die kan geen dubbele keys hebben) met een key (bv. <code>"role"</code>) <strong>twee keer</strong>, in de hoop dat de signature-check en de autorisatielogica elk een andere van de twee waarden gebruiken.[cite: 2]</p>
+    <p><strong>Generaliseer naar andere parsing-mismatches:</strong> 📘[cite: 2]</p>
+    <ul>
+        <li><strong>Unicode-tricks</strong>: <code>"r\u006fle"</code> (unicode-escape voor 'o') kan door de ene parser anders behandeld worden dan door de andere.[cite: 2]</li>
+        <li><strong>Extra/onverwachte velden</strong>: soms valideert de signature-check enkel een subset van velden, en kan je extra velden toevoegen die de autorisatielogica wel leest.[cite: 2]</li>
+        <li><strong>Content-Type verwarring</strong>: dezelfde data als <code>application/json</code> vs <code>application/x-www-form-urlencoded</code> versturen kan soms een andere parser triggeren aan de serverkant.[cite: 2]</li>
+        <li><strong>Timing-attack op MAC-vergelijking</strong>: als een server MAC's vergelijkt met een niet-constant-time <code>==</code> (i.p.v. <code>hmac.compare_digest</code>), kan je in theorie byte per byte raden via responstijd — zelden praktisch haalbaar binnen een CTF-sessie, maar wel een herkenbaar concept.[cite: 2]</li>
+    </ul>
+
+    <h2>5. Public-key cryptografie (RSA, Diffie-Hellman, ECC) 📘[cite: 2]</h2>
+    <p><em>(Nog niet gezien in jullie opgaves, maar hoort standaard bij dit vak — hieronder de meest voorkomende CTF-klassiekers.)[cite: 2]</em></p>
+    <h3>5.1 RSA-aanvallen[cite: 2]</h3>
+    <p>RSA: publieke sleutel <code>(n, e)</code>, privé <code>d</code>, met <code>n = p*q</code> (2 grote priemgetallen).[cite: 2] Versleutelen: <code>c = m^e mod n</code>.[cite: 2] Herken welke situatie van toepassing is:[cite: 2]</p>
+    <table>
+        <tr><th>Signaal</th><th>Aanval</th></tr>
+        <tr><td><code>e = 3</code> (of een andere kleine exponent) en bericht is kort t.o.v. <code>n</code>[cite: 2]</td><td><strong>Cube-root attack</strong>: als <code>m^3 &lt; n</code>, dan is <code>c</code> gewoon <code>m^3</code> zonder modulo-wrap → <code>m = round(c ** (1/3))</code> (met <code>gmpy2.iroot</code> voor exacte integer-cube-root bij grote getallen)[cite: 2]</td></tr>
+        <tr><td>Hetzelfde bericht verstuurd naar <strong>3+ ontvangers</strong> met verschillende <code>n</code>'s, zelfde kleine <code>e</code>[cite: 2]</td><td><strong>Håstad's broadcast attack</strong> — Chinese Reststelling (CRT) combineren en dan e-de-machtswortel nemen[cite: 2]</td></tr>
+        <tr><td>Twee verschillende ciphertexts met <strong>dezelfde modulus <code>n</code></strong>, verschillende <code>e1</code>/<code>e2</code> (vaak co-priem)[cite: 2]</td><td><strong>Common modulus attack</strong> — met extended Euclidean algorithm <code>a*e1 + b*e2 = 1</code> vinden, dan <code>m = c1^a * c2^b mod n</code>[cite: 2]</td></tr>
+        <tr><td><code>p</code> en <code>q</code> liggen <strong>dicht bij elkaar</strong> (beide rond √n)[cite: 2]</td><td><strong>Fermat-factorisatie</strong>: <code>a = ceil(sqrt(n))</code>, test of <code>a² - n</code> een perfect kwadraat is, verhoog <code>a</code> tot dat zo is[cite: 2]</td></tr>
+        <tr><td><code>d</code> (privésleutel) is <strong>klein</strong> t.o.v. <code>n</code>[cite: 2]</td><td><strong>Wiener's attack</strong> — kettingbreuk-expansie van <code>e/n</code> vindt <code>d</code>[cite: 2]</td></tr>
+        <tr><td>Je kent <strong>één van de priemfactoren</strong> (<code>p</code> of <code>q</code>) al, of ze zijn klein genoeg[cite: 2]</td><td>Factoriseer <code>n</code> direct (<code>sympy.factorint(n)</code>, of http://factordb.com — <strong>eerst opzoeken of <code>n</code> al gefactoriseerd in een database staat, zeer vaak het geval in CTF's!</strong>)[cite: 2]</td></tr>
+        <tr><td><code>n</code> is heel klein (&lt; ~100 bits)[cite: 2]</td><td>Brute-force factoriseren met Pollard's rho (<code>sympy.factorint</code>)[cite: 2]</td></tr>
+        <tr><td>Padding-oracle op RSA (PKCS#1 v1.5), server lekt "valid/invalid padding"[cite: 2]</td><td><strong>Bleichenbacher's attack</strong> — complex, zoek op *"Bleichenbacher attack RSA PKCS1"*[cite: 2]</td></tr>
+    </table>
+    <p><strong>Praktisch startpunt voor élke RSA-opgave:</strong>[cite: 2]</p>
+    <pre><code># 1. Probeer eerst factordb.com — vaak is n al bekend/gefactoriseerd
+# 2. Zo niet, test de signalen hierboven in volgorde (klein e → common modulus → Fermat → Wiener)
+from sympy import factorint
+n = ...  # de modulus
+factors = factorint(n)  # werkt enkel voor kleine/kwetsbare n, anders time-out</code></pre>
+    <p><strong>Tool die alles hierboven automatiseert:</strong> <strong>RsaCtfTool</strong> — https://github.com/Ganapati/RsaCtfTool[cite: 2]</p>
+    <pre><code>python3 RsaCtfTool.py --publickey key.pem --uncipherfile ciphertext.bin</code></pre>
+
+    <h3>5.2 Diffie-Hellman-aanvallen[cite: 2]</h3>
+    <p>Standaard DH: beide partijen kiezen geheim <code>a</code>/<code>b</code>, delen <code>A = g^a mod p</code>, <code>B = g^b mod p</code>, gedeelde sleutel <code>g^(ab) mod p</code>.[cite: 2]</p>
+    <ul>
+        <li><strong>Kleine of bekende <code>p</code></strong>: als <code>p</code> klein genoeg is (&lt; ~60 bits), is het discrete-log-probleem (<code>a</code> vinden uit <code>A = g^a mod p</code>) gewoon brute-forceerbaar of met Pollard's rho / baby-step-giant-step op te lossen (<code>sympy.discrete_log(p, A, g)</code>).[cite: 2]</li>
+        <li><strong>Kleine subgroep-aanval</strong>: als <code>p-1</code> veel kleine priemfactoren heeft, kan de geheime exponent <code>mod</code> die kleine factoren gelekt worden (Pohlig-Hellman-algoritme).[cite: 2]</li>
+        <li><strong>Logjam-stijl aanval</strong> (bekende/herbruikte standaard-<code>p</code>-waarden van 512-1024 bit): zoek op *"logjam attack precomputation"*.[cite: 2]</li>
+        <li><strong>MITM zonder authenticatie</strong>: als DH niet aan een signature/certificaat gekoppeld is, kan een attacker tussen beide partijen eigen <code>g^x</code>-waarden insturen.[cite: 2]</li>
+    </ul>
+
+    <h3>5.3 ECDSA / digitale handtekeningen — nonce-hergebruik[cite: 2]</h3>
+    <p>Als twee verschillende berichten <strong>dezelfde "random" nonce <code>k</code></strong> gebruiken bij ECDSA-signing (klassieke implementatiefout, net als bij stream ciphers!), kan je daaruit de <strong>privésleutel</strong> herleiden met simpele modulaire rekenkunde.[cite: 2] Herkenning: twee signatures met dezelfde <code>r</code>-waarde.[cite: 2] Zoek op *"ECDSA nonce reuse attack"* — exact dezelfde "hergebruik-logica" als jullie stream cipher-opgaves, maar dan op een ander wiskundig niveau.[cite: 2]</p>
+
+    <h2>6. Web / API-kwetsbaarheden 📘[cite: 2]</h2>
+    <p><em>(Relevant als een opgave een HTTP-endpoint geeft i.p.v. een raw TCP-socket — zoals Token of Trust / Signed Sealed Misinterpreted.)[cite: 2]</em></p>
+    <table>
+        <tr><th>Kwetsbaarheid</th><th>Herkenning</th><th>Snelle test</th></tr>
+        <tr><td><strong>IDOR</strong> (Insecure Direct Object Reference)[cite: 2]</td><td>URL/body met een ID (<code>/user/1234</code>, <code>"account_id":5</code>)[cite: 2]</td><td>Verhoog/verlaag het ID, kijk of je andermans data ziet[cite: 2]</td></tr>
+        <tr><td><strong>SQL-injectie</strong>[cite: 2]</td><td>Een inputveld voedt vermoedelijk een databasequery[cite: 2]</td><td>Probeer <code>' OR '1'='1</code>, <code>'; --</code>, en kijk naar foutmeldingen die SQL-syntax verraden[cite: 2]</td></tr>
+        <tr><td><strong>SSRF</strong> (Server-Side Request Forgery)[cite: 2]</td><td>De server haalt zelf een URL op die jij (deels) controleert[cite: 2]</td><td>Geef <code>http://localhost/...</code> of <code>http://169.254.169.254/...</code> (cloud-metadata) als URL-parameter[cite: 2]</td></tr>
+        <tr><td><strong>Path traversal</strong>[cite: 2]</td><td>Een bestandsnaam/pad als parameter[cite: 2]</td><td>Probeer <code>../../../../etc/passwd</code> of URL-encoded varianten <code>%2e%2e%2f</code>[cite: 2]</td></tr>
+        <tr><td><strong>Command injection</strong>[cite: 2]</td><td>De server lijkt een shell-commando te bouwen met jouw input[cite: 2]</td><td>Probeer <code>; whoami</code>, <code>`id`</code>, <code>$(whoami)</code>[cite: 2]</td></tr>
+        <tr><td><strong>Open redirect</strong>[cite: 2]</td><td>Een <code>redirect=</code> of <code>next=</code>-parameter[cite: 2]</td><td>Zet 'm op een externe URL, kijk of de server zonder validatie doorstuurt[cite: 2]</td></tr>
+        <tr><td><strong>CSRF</strong>[cite: 2]</td><td>Een actie met side-effects zonder anti-CSRF-token[cite: 2]</td><td>Maak een auto-submit HTML-formulier dat de actie namens een ingelogde gebruiker uitvoert[cite: 2]</td></tr>
+        <tr><td><strong>Insecure Deserialization</strong>[cite: 2]</td><td>Een geserialiseerd object (pickle, Java-serialized, PHP <code>O:</code>) als input[cite: 2]</td><td>Zoek naar bekende gadget chains voor dat framework (bv. <code>ysoserial</code> voor Java)[cite: 2]</td></tr>
+        <tr><td><strong>Verbose errors / stack traces</strong>[cite: 2]</td><td>Elke foutmelding bekijken, ook "onbelangrijke"[cite: 2]</td><td>Soms lekt een stack trace paden, library-versies, of zelfs secrets[cite: 2]</td></tr>
+    </table>
+    <p><strong>Algemene tip:</strong> kijk altijd naar <strong>response headers</strong> (<code>Server:</code>, <code>X-Powered-By:</code>) — die verraden vaak het framework, wat je meteen naar bekende CVE's/kwetsbaarheden voor die specifieke versie kan leiden (zoek op *"{framework} {versie} CVE"*).[cite: 2]</p>
+
+    <h2>7. Encoding &amp; obfuscatie herkennen (vóór je aan "echte crypto" denkt) 📘[cite: 2]</h2>
+    <table>
+        <tr><th>Signaal</th><th>Waarschijnlijk</th><th>Decodeer met</th></tr>
+        <tr><td>Enkel <code>0-9a-f</code>, even aantal karakters[cite: 2]</td><td>Hex[cite: 2]</td><td><code>bytes.fromhex(s)</code>[cite: 2]</td></tr>
+        <tr><td>Letters+cijfers+<code>+</code>/<code>/</code>, eindigt op <code>=</code> of <code>==</code>[cite: 2]</td><td>Base64[cite: 2]</td><td><code>base64.b64decode(s)</code>[cite: 2]</td></tr>
+        <tr><td>Zoals base64 maar met <code>-</code>/<code>_</code> i.p.v. <code>+</code>/<code>/</code>[cite: 2]</td><td>Base64 <strong>URL-safe</strong>[cite: 2]</td><td><code>base64.urlsafe_b64decode(s)</code>[cite: 2]</td></tr>
+        <tr><td>Enkel hoofdletters A-Z en cijfers 2-7[cite: 2]</td><td>Base32[cite: 2]</td><td><code>base64.b32decode(s)</code>[cite: 2]</td></tr>
+        <tr><td><code>%XX</code>-patronen[cite: 2]</td><td>URL-encoding[cite: 2]</td><td><code>urllib.parse.unquote(s)</code>[cite: 2]</td></tr>
+        <tr><td>Tekst blijft leesbaar maar letters lijken verschoven[cite: 2]</td><td>Caesar/ROT13[cite: 2]</td><td><code>codecs.decode(s, 'rot13')</code>, of brute force alle 25 shifts[cite: 2]</td></tr>
+        <tr><td>Drie delen gescheiden door punten, elk base64url[cite: 2]</td><td><strong>JWT</strong>[cite: 2]</td><td>zie §4.2[cite: 2]</td></tr>
+        <tr><td>Lijkt op binaire data met leesbare stukjes ertussen[cite: 2]</td><td>Mogelijk een serialisatieformaat (pickle, protobuf) of gewoon ruwe bytes[cite: 2]</td><td><code>file &lt;bestand&gt;</code>, <code>xxd &lt;bestand&gt; | head</code>[cite: 2]</td></tr>
+        <tr><td>Herhaalde groepjes van exact dezelfde lengte[cite: 2]</td><td>Mogelijk Base85/Ascii85[cite: 2]</td><td><code>base64.a85decode(s)</code>[cite: 2]</td></tr>
+    </table>
+    <p><strong>CyberChef</strong> (https://gchq.github.io/CyberChef/) is de snelste manier om snel door meerdere encoding-lagen te "Magic"-detecteren zonder zelf Python te moeten schrijven — gebruik de <strong>Magic</strong>-operator als je geen idee hebt wat voor encoding iets is.[cite: 2]</p>
+
+    <h2>8. Netwerkanalyse / Wireshark / tshark snelreferentie[cite: 2]</h2>
+    <pre><code># Toon TCP-conversaties (snel zien welke poort/host relevant is)
+tshark -r capture.pcapng -q -z conv,tcp
+
+# Decodeer een niet-standaardpoort als een specifiek protocol
+tshark -r capture.pcapng -d tcp.port==50002,rtsp -Y rtsp
+
+# Volledige inhoud van één frame (headers, alles)
+tshark -r capture.pcapng -Y 'frame.number==10' -O rtsp
+
+# Extract ruwe payload-bytes van een specifiek frame
+tshark -r capture.pcapng -Y 'frame.number==10' -T fields -e tcp.payload
+
+# HTTP-requests/responses snel overzien
+tshark -r capture.pcapng -Y http -T fields -e http.request.full_uri -e http.response.code
+
+# Bestanden/objecten die over HTTP zijn verstuurd uitpakken
+tshark -r capture.pcapng --export-objects http,/tmp/extracted/
+
+# "Follow TCP stream" equivalent in tshark
+tshark -r capture.pcapng -q -z follow,tcp,ascii,0</code></pre>
+    <p>In Wireshark zelf: rechtermuisklik pakket → <strong>Decode As...</strong>, of permanent via <strong>Edit → Preferences → Protocols → &lt;PROTOCOL&gt; → TCP port(s)</strong>.[cite: 2]</p>
+
+    <h2>9. Nuttige Python-snippets[cite: 2]</h2>
+    <pre><code># Veilig blijven lezen van een TCP-socket tot je een bepaalde marker ziet
+def recv_until(sock, marker: str, bufsize=4096) -> str:
+    data = ""
+    while marker not in data:
+        data += sock.recv(bufsize).decode("utf-8", errors="replace")
+    return data
+
+# XOR van twee byte-reeksen (kortste lengte wint)
+def xor_bytes(a: bytes, b: bytes) -> bytes:
+    return bytes(x ^ y for x, y in zip(a, b))
+
+# rockyou.txt robuust inlezen (bevat niet-UTF8 troep) zonder alles in het geheugen te laden
+with open("rockyou.txt", encoding="utf-8", errors="ignore") as f:
+    passwords = (line.rstrip("\n") for line in f)   # generator!
+
+# Snel een onbekende blob proberen te identificeren/decoderen
+import base64, binascii
+def guess_decode(s: str):
+    for name, fn in [
+        ("hex", lambda x: bytes.fromhex(x)),
+        ("base64", lambda x: base64.b64decode(x)),
+        ("base64url", lambda x: base64.urlsafe_b64decode(x + "=" * (-len(x) % 4))),
+        ("base32", lambda x: base64.b32decode(x)),
+    ]:
+        try:
+            print(name, "->", fn(s))
+        except Exception:
+            pass</code></pre>
+
+    <h2>10. Tooling-cheatsheet[cite: 2]</h2>
+    <table>
+        <tr><th>Taak</th><th>Tool / commando</th></tr>
+        <tr><td>Wachtwoord-hash kraken (algemeen, GPU-versneld)[cite: 2]</td><td><code>hashcat -m &lt;mode&gt; -a 0 hash.txt rockyou.txt</code> — mode 0=MD5, 100=SHA1, 1400=SHA256, 16500=JWT HS256[cite: 2]</td></tr>
+        <tr><td>Wachtwoord-hash kraken (CPU, flexibel)[cite: 2]</td><td><code>john --wordlist=rockyou.txt hash.txt</code>[cite: 2]</td></tr>
+        <tr><td>JWT-aanvallen automatiseren[cite: 2]</td><td><code>jwt_tool</code> — https://github.com/ticarpi/jwt_tool[cite: 2]</td></tr>
+        <tr><td>RSA-aanvallen automatiseren[cite: 2]</td><td><code>RsaCtfTool</code> — https://github.com/Ganapati/RsaCtfTool[cite: 2]</td></tr>
+        <tr><td>Gefactoriseerde/bekende RSA-moduli opzoeken[cite: 2]</td><td>https://factordb.com[cite: 2]</td></tr>
+        <tr><td>Encoding/crypto snel uitproberen in de browser[cite: 2]</td><td>https://gchq.github.io/CyberChef/[cite: 2]</td></tr>
+        <tr><td>Algemene decoder (Caesar, Vigenère, enz.)[cite: 2]</td><td>https://www.dcode.fr/[cite: 2]</td></tr>
+        <tr><td>OpenSSL — certificaat/sleutel inspecteren[cite: 2]</td><td><code>openssl x509 -in cert.pem -text -noout</code>[cite: 2]</td></tr>
+        <tr><td>OpenSSL — RSA-sleutel info[cite: 2]</td><td><code>openssl rsa -in key.pem -text -noout</code>[cite: 2]</td></tr>
+        <tr><td>OpenSSL — snel AES/DES encrypt/decrypt testen[cite: 2]</td><td><code>openssl enc -aes-128-ecb -d -K &lt;hexkey&gt; -in ct.bin -out pt.bin</code>[cite: 2]</td></tr>
+        <tr><td>Padding-oracle automatiseren[cite: 2]</td><td><code>padbuster</code>[cite: 2]</td></tr>
+        <tr><td>Hash length-extension automatiseren[cite: 2]</td><td><code>hashpump</code> — https://github.com/bwall/HashPump[cite: 2]</td></tr>
+        <tr><td>Python length-extension library[cite: 2]</td><td><code>pip install hlextend</code>[cite: 2]</td></tr>
+        <tr><td>Mersenne Twister state recovery[cite: 2]</td><td><code>pip install randcrack</code>[cite: 2]</td></tr>
+    </table>
+
+    <h2>11. Bronnen om snel te doorzoeken tijdens de sessie[cite: 2]</h2>
+    <table>
+        <tr><th>Onderwerp</th><th>Bron</th></tr>
+        <tr><td>JWT uitleg + live decoder[cite: 2]</td><td>https://jwt.io/introduction[cite: 2]</td></tr>
+        <tr><td>JWT/HMAC/algemene web-labs, stap-voor-stap[cite: 2]</td><td>https://pentesterlab.com/exercises[cite: 2]</td></tr>
+        <tr><td>Web-kwetsbaarheden algemeen (IDOR, SSRF, SQLi...)[cite: 2]</td><td>https://portswigger.net/web-security[cite: 2]</td></tr>
+        <tr><td>Digest Authentication (RFC's)[cite: 2]</td><td>https://en.wikipedia.org/wiki/Digest_access_authentication[cite: 2]</td></tr>
+        <tr><td>Padding Oracle (CBC)[cite: 2]</td><td>https://robertheaton.com/2013/07/29/padding-oracle-attack/[cite: 2]</td></tr>
+        <tr><td>Length-extension attack[cite: 2]</td><td>https://en.wikipedia.org/wiki/Length_extension_attack[cite: 2]</td></tr>
+        <tr><td>Meet-in-the-Middle (2DES voorbeeld)[cite: 2]</td><td>https://en.wikipedia.org/wiki/Meet-in-the-middle_attack[cite: 2]</td></tr>
+        <tr><td>Birthday attack / collision[cite: 2]</td><td>https://en.wikipedia.org/wiki/Birthday_attack[cite: 2]</td></tr>
+        <tr><td>RSA-aanvallen overzicht[cite: 2]</td><td>https://github.com/Ganapati/RsaCtfTool (README geeft goed overzicht van alle aanvalstypes)[cite: 2]</td></tr>
+        <tr><td>Wiener's attack uitleg[cite: 2]</td><td>zoek *"Wiener's attack RSA continued fraction"*[cite: 2]</td></tr>
+        <tr><td>Diffie-Hellman / Logjam[cite: 2]</td><td>https://weakdh.org/[cite: 2]</td></tr>
+        <tr><td>ECDSA nonce reuse[cite: 2]</td><td>zoek *"ECDSA nonce reuse attack explained"*[cite: 2]</td></tr>
+        <tr><td>AES/GF(2⁸) theorie[cite: 2]</td><td>eigen cursusslides (Stallings, hoofdstuk 5)[cite: 2]</td></tr>
+        <tr><td>CyberChef[cite: 2]</td><td>https://gchq.github.io/CyberChef/[cite: 2]</td></tr>
+        <tr><td>MD5-collisies kant-en-klaar[cite: 2]</td><td>https://github.com/corkami/collisions[cite: 2]</td></tr>
+    </table>
+
+    <h2>12. Nog openstaand / expliciet onzeker[cite: 2]</h2>
+    <ul>
+        <li><strong>AES 2 demo version</strong>: methodologie (MITM, §2.2) staat klaar, maar ik heb nooit het echte <code>enc.bmp</code>-bestand gezien, dus ik weet niet of het known-plaintext-blok (BMP-header) klopte of wat de uiteindelijke flag was.[cite: 2]</li>
+        <li><strong>Secure Bank 1 — exacte eindflag</strong>: de bit-flip-methode werkt bevestigd (<code>Transfer of X EUR to bob processed</code>), maar check zelf of een bedrag als "100000" een foutmelding geeft (validatie-bereik) en pas zo nodig aan.[cite: 2]</li>
+        <li><strong>§5, §6, §7 zijn algemene/aanpalende theorie</strong>, niet getest op jullie specifieke challenge-server — behandel ze als "waar te beginnen zoeken" als je zoiets tegenkomt, niet als kant-en-klare oplossing.[cite: 2]</li>
+    </ul>
+    <p><strong>Succes morgen!</strong> Bij twijfel: terug naar §0, en vraag je af welk vakje het best past bij wat de opgavetekst je vertelt.[cite: 2]</p>
+</div>
+
+<hr>
+
+<div class="document-section" id="file3">
+    <h1>Stream Ciphers &amp; Bit-Flipping Cheat Sheet[cite: 3]</h1>
+    
+    <h2>Basisprincipes van Stream Ciphers (XOR Regels)[cite: 3]</h2>
+    <p>Een stream cipher genereert een pseudo-willekeurige stroom van bits (de <strong>Keystream</strong>) op basis van een sleutel (en vaak een Nonce/IV).[cite: 3] De versleuteling gebeurt door de Keystream te XOR'en met de Plaintext.[cite: 3]</p>
+    <ul>
+        <li><strong>Versleutelen:</strong> Ciphertext = Plaintext ⊕ Keystream[cite: 3]</li>
+        <li><strong>Ontsleutelen:</strong> Plaintext = Ciphertext ⊕ Keystream[cite: 3]</li>
+        <li><strong>Keystream achterhalen (Known-Plaintext):</strong> Keystream = Ciphertext ⊕ Plaintext[cite: 3]</li>
+    </ul>
+
+    <h2>De Wiskunde van een Bit-Flipping Aanval[cite: 3]</h2>
+    <p>Als je de originele plaintext kent (of deels kan raden), kan je de ciphertext manipuleren zodat deze na ontsleuteling door de server in jouw gewenste tekst verandert, zonder dat je de geheime sleutel nodig hebt.[cite: 3]</p>
+    
+    <h3>Methode 1: Via de Keystream (2 stappen)[cite: 3]</h3>
+    <p>Dit is de methode die in je script werkte.[cite: 3]</p>
+    <ol>
+        <li><strong>Vind de Keystream:</strong> XOR de originele ciphertext met de bekende originele plaintext.<br>K = C ⊕ P<sub>oud</sub>[cite: 3]</li>
+        <li><strong>Maak de nieuwe Ciphertext:</strong> XOR jouw nieuwe (vervalste) plaintext met de gevonden Keystream.<br>C<sub>nieuw</sub> = P<sub>nieuw</sub> ⊕ K[cite: 3]</li>
+    </ol>
+    
+    <h3>Methode 2: Directe XOR (1 stap)[cite: 3]</h3>
+    <p>Omdat XOR associatief en commutatief is, kan je de bovenstaande stappen ook combineren tot één formule:[cite: 3]</p>
+    <ul>
+        <li>C<sub>nieuw</sub> = C ⊕ P<sub>oud</sub> ⊕ P<sub>nieuw</sub>[cite: 3]</li>
+    </ul>
+    <p><em>(In Python: <code>bytes(c ^ p_old ^ p_new for c, p_old, p_new in zip(ciphertext, old_plaintext, new_plaintext))</code>)</em>[cite: 3]</p>
+    
+    <h2>Eigenschappen van XOR (Waarom dit werkt)[cite: 3]</h2>
+    <ul>
+        <li>A ⊕ A = 0 (Iets XOR'en met zichzelf is nul)[cite: 3]</li>
+        <li>A ⊕ 0 = A (Iets XOR'en met nul verandert niets)[cite: 3]</li>
+        <li>A ⊕ B ⊕ A = B (Als je twee keer met hetzelfde XOR't, hef je het op)[cite: 3]</li>
+    </ul>
+
+    <h2>Cruciale Aandachtspunten voor Oefeningen[cite: 3]</h2>
+    <ul>
+        <li><strong>Exacte lengte:</strong> XOR werkt bit per bit.[cite: 3] Jouw P<sub>oud</sub> en P<sub>nieuw</sub> moeten <strong>exact even lang</strong> zijn in bytes.[cite: 3]</li>
+        <li><strong>Data formaten:</strong> Let goed op verborgen spaties of tekens.[cite: 3] Bij JSON voegt Python's <code>json.dumps()</code> vaak een spatie toe na een dubbele punt (<code>"amount": "100"</code> in plaats van <code>"amount":"100"</code>).[cite: 3] Eén byte verschil verschuift de hele berekening.[cite: 3]</li>
+        <li><strong>Nonce/IV:</strong> Vaak worden de eerste bytes van de raw data gebruikt als Nonce of Initialization Vector.[cite: 3] Deze mag je niet mee-XOR'en in je bit-flipping berekening, maar moet je wel ongewijzigd terugsturen voor de gemanipuleerde ciphertext.[cite: 3]</li>
+        <li><strong>Byte manipulatie in Python:</strong> Gebruik <code>zip()</code> correct.[cite: 3] Zorg dat je iterators even lang zijn en dat je bytes met bytes XOR't.[cite: 3] Gebruik <code>bytes.fromhex()</code> en <code>.hex().encode()</code> om te wisselen tussen netwerkpayloads en wiskundige bewerkingen.[cite: 3]</li>
+    </ul>
+</div>
+
+</body>
+</html>

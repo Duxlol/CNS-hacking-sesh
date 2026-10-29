@@ -1,0 +1,141 @@
+Stream Ciphers:
+Replanting
+You have obtained two encrypted messages:
+
+A public server status message whose plaintext is known. A confidential message containing a secret flag.
+
+Both messages were encrypted using the same stream cipher configuration.
+cipher.py secret.txt public.txt
+
+Secure Bank
+Secure Bank has unleashed their newest CLI-based money transfer tool: Connect using nc cns-test.idlab.uantwerpen.be 50001 now!
+
+They internally use super secure Salsa20 encryption using their proprietary JSON formatted transaction format (see file). Maybe you can hack it to pay Bob back the money you owe him...
+
+(In case you try this at home, you need to be connected to the UA-VPN)
+
+Hint:
+
+def encrypt_transaction(transaction):
+    """Encrypt a transaction using Salsa20."""
+    nonce = secrets.token_bytes(8)
+
+    cipher = Salsa20.new(key=KEY, nonce=nonce)
+
+    plaintext = json.dumps(
+        transaction,
+        separators=(",", ":")
+    ).encode()
+    print(plaintext)
+
+    ciphertext = cipher.encrypt(plaintext)
+
+    # Transmit nonce alongside ciphertext
+    return nonce + ciphertext
+
+format.json
+
+
+Block Ciphers:
+Key standardisation
+I have standardised the keys for my IoT devices so they are easier to program! I think this is really smart, since the devices are simple I decided to use DES as the encryption algorithm.
+
+{ "namespace": "IOTDEV", "message": "74eb40cf03b84d0bc4cd2c6e0fe97fb4e70546d3e09c530d35b344e530351bac" }
+
+Noncense
+The guys in IT told be those nonces are nonsene!
+challenge.py ciphertext_flag.hex ciphertext_known.hex known_message.txt
+
+Hashing:
+Secure Bank 2 
+With your previous attack on Secure Bank, they decided to hire you as a security expert.
+
+They have updated their payment system but due to the money lost during your previous hack, they don't have enough money to store the full fingerprint in their database anymore, you might be able to make use of that!
+
+API details:
+
+Address: cns-test.idlab.uantwerpen.be
+Port: 50003
+
+Payment Protocol: The server expects two JSON payment records, each on a separate line. It validates both records and returns their audit fingerprints.
+
+Each record must contain exactly these fields:
+
+Field; Type; Requirements
+
+    reference; String; 1–128 characters
+    from_account; String; Must start with SIM-
+    to_account; String; Must start with SIM- (different from source)
+    amount; Number; Must equal 10
+    currency; String; Must be EUR
+    timestamp; String; Valid ISO 8601 timestamp
+
+To send the JSON:
+
+def canonicalize(payment):
+    return json.dumps(
+        payment,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+
+Better Hash
+See the code below, I don't think it's a better hash:
+
+def rol(x, n):
+    return ((x << n) | (x >> (8 - n))) & 0xff
+
+def better_hash(msg):
+    state = bytearray(msg.encode())
+
+    for rnd in range(8):
+
+        for i in range(len(state)):
+            state[i] ^= (rnd * 41 + i * 17) & 0xff
+            state[i] = rol(state[i], (rnd + i) & 7)
+
+        for i in range(1, len(state)):
+            state[i] ^= state[i - 1]
+
+        state = state[1:] + state[:1]
+
+    return state.hex()
+
+print(better_hash(FLAG))
+
+Hash: 5f070b54361613bca31a123e95321cff154ba64f549bb34fdc7688f10efb569aed4ccbd6ba
+
+Space Race 1
+We found a way to connect to a Mars Relay station, we patched it through to our servers:
+
+cns-test.idlab.uantwerpen.be 50006
+
+Can you investigate it?
+
+Security Cam 
+We intercepted some network traffic from a security camera. Can you figure out the password and see into their facility?
+
+(The screenshot attached is a small hint to configure Wireshark to show the correct traffic type on a non-standard port)
+security-cam.pcapng 2026-10-15_121920.png rockyou.txt
+
+HMAC
+Signed, Sealed, Misinterpreted 
+The vault authenticates JSON requests with HMAC-SHA256. A legitimate signed request is available at /challenge.
+
+Your task is to access the administrator vault without knowing the secret key.
+
+The signature is supplied in the X-Signature HTTP header.
+Submit your request as JSON to /vault.
+You may reuse the signature supplied by the challenge endpoint.
+
+Connection details: http://cns-test.idlab.uantwerpen.be:50007
+
+Token of Trust
+The Vault issues you a session token when you log in, and checks it before letting anyone into the admin area. You’ve been given a guest account. The admin area is off-limits to you… or is it?
+
+Log in to get your token, inspect it closely, and find a way to walk into /admin as an administrator. You will not need to know, guess, or crack the server’s secret key.
+
+Target: http://cns-test.idlab.uantwerpen.be:50009
+
+Tip: a JSON Web Token is three base64url parts separated by dots {e.g.: header.payload.signature.} Decode them and read what each part says.
